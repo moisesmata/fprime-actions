@@ -1,0 +1,47 @@
+name: "F´ Soak Package"
+description: "Assemble build artifacts, integration tests, and requirements into one directory ready for upload to the soak deploy job"
+inputs:
+  build-artifacts:
+    description: "Path to the build-artifacts directory produced by the build"
+    required: false
+    default: "./build-artifacts"
+  test-source:
+    description: "Directory of integration tests to include (copied to <output>/int). Empty to skip."
+    required: false
+    default: ""
+  requirements:
+    description: "requirements.txt to include, used by soak-deploy to build the soak virtualenv"
+    required: false
+    default: "./lib/fprime/requirements.txt"
+  output:
+    description: "Directory to assemble the soak artifact into"
+    required: false
+    default: "soak-artifact"
+outputs:
+  path:
+    description: "The assembled soak artifact directory (pass to actions/upload-artifact)"
+    value: ${{ steps.package.outputs.path }}
+runs:
+  using: "composite"
+  steps:
+    - name: "Assemble soak artifact"
+      id: package
+      shell: bash
+      env:
+        BUILD_ARTIFACTS: ${{ inputs.build-artifacts }}
+        TEST_SOURCE: ${{ inputs.test-source }}
+        REQUIREMENTS: ${{ inputs.requirements }}
+        OUTPUT_DIR: ${{ inputs.output }}
+      run: |
+        set -e
+        mkdir -p "${OUTPUT_DIR}"
+        cp -r "${BUILD_ARTIFACTS}" "${OUTPUT_DIR}/build-artifacts"
+        # Ship the integration tests and a requirements.txt so the deploy job
+        # (which only downloads this artifact) can build the venv and install tests.
+        if [ -n "${TEST_SOURCE}" ] && [ -d "${TEST_SOURCE}" ]; then
+          mkdir -p "${OUTPUT_DIR}/int"
+          cp -r "${TEST_SOURCE}/." "${OUTPUT_DIR}/int/"
+        fi
+        cp "${REQUIREMENTS}" "${OUTPUT_DIR}/requirements.txt"
+        echo "path=${OUTPUT_DIR}" >> "${GITHUB_OUTPUT}"
+        echo "[INFO] Soak artifact assembled at ${OUTPUT_DIR}"

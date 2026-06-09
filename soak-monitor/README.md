@@ -4,19 +4,15 @@ The `soak-monitor` action analyzes data captured during a soak test for health,
 resource, and stability problems. It decodes `Svc::ComLogger` `.com` files with
 `fprime-gds`, raises alerts for FATAL/WARNING events and resource thresholds, and
 runs **trend analysis** over every numeric channel to catch slow degradations
-(e.g. a memory leak or a steadily draining buffer pool) that a single snapshot
-would miss.
+(e.g. a memory leak or a steadily draining buffer pool). 
 
-It is deployment-agnostic: no component or channel names are hard-coded, so it
-runs against any F´ deployment. The step fails (non-zero) only when a FATAL is
-detected, so it can gate a scheduled soak job.
 
 ## Inputs
 
 | Input           | Default     | Description                                                                                                         |
 |-----------------|-------------|---------------------------------------------------------------------------------------------------------------------|
-| `dictionary`    | (required)  | Path to the deployment dictionary JSON used to decode events and channels.                                          |
-| `com-logs`      | `""`        | Optional directory of `Svc::ComLogger` `.com` files. Read if present; ignored (not an error) if missing or empty.   |
+| `dictionary`    | (required)  | Path (glob allowed) to the deployment dictionary JSON used to decode events and channels.                           |
+| `com-logs`      | `""`        | Optional directory of `Svc::ComLogger` `.com` files. Read if present; ignored if missing or empty.   |
 | `python`        | `python3`   | Python interpreter to run the monitor with. Point at the soak virtualenv to reuse its `fprime-gds`.                 |
 | `logs-dir`      | `""`        | Directory used for the monitor's own GDS logging prefix / scratch files. A temp dir is created when empty.          |
 | `fail-on-fatal` | `"true"`    | Fail the step when a FATAL event is detected.                                                                       |
@@ -26,7 +22,7 @@ detected, so it can gate a scheduled soak job.
 ```yaml
 - uses: nasa/fprime-actions/soak-monitor@devel
   with:
-    dictionary: /opt/fprime-soak/dict/MyDeploymentTopologyDictionary.json
+    dictionary: "/opt/fprime-soak/dict/*TopologyDictionary.json"
     com-logs: /opt/fprime-soak/ComLoggerFiles
     python: /opt/fprime-soak/venv/bin/python
 ```

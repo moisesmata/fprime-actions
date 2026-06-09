@@ -4,8 +4,7 @@ F´ Soak Test Monitor
 ====================
 
 Analyzes data captured during a soak test for health, resource, and stability
-problems. It is intentionally deployment-agnostic: it does not hard-code any
-component or channel names, so it can run against any F´ deployment.
+problems. 
 
 Inputs (all optional unless noted):
   * ``--dictionary`` (required by StandardPipelineParser): the deployment
@@ -22,8 +21,7 @@ What it does:
      degradations that a single snapshot would miss (e.g. a memory leak or a
      steadily draining buffer pool).
 
-Exit code is non-zero only when a FATAL condition is detected, so it can gate a
-scheduled soak job.
+Exit code is non-zero only when a FATAL condition is detected.
 """
 
 import sys
@@ -37,8 +35,7 @@ from fprime_gds.common.pipeline.standard import StandardPipeline
 from fprime_gds.common.utils.config_manager import ConfigManager
 from fprime_gds.executables.cli import ParserBase, StandardPipelineParser
 
-# Keywords used to classify numeric channels without hard-coding deployment
-# specific names. Matching is case-insensitive and substring based.
+# Keywords used to classify numeric channels. Matching is case-insensitive and substring based.
 MEMORY_KEYWORDS = ("memory", "heap", "ram", "mem")
 CPU_KEYWORDS = ("cpu", "load")
 BUFFER_FREE_KEYWORDS = ("buffer", "buff", "free", "empty", "available", "avail", "remaining")

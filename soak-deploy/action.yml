@@ -125,11 +125,8 @@ runs:
 
         # --- Stop any previous soak services so we get a clean slot -------------
         for svc in "${FSW_SERVICE}" "${GDS_SERVICE}"; do
-          if systemctl list-unit-files "${svc}.service" >/dev/null 2>&1; then
-            echo "[INFO] Stopping existing ${svc}"
-            sudo systemctl stop "${svc}" 2>/dev/null || true
-            sudo systemctl disable "${svc}" 2>/dev/null || true
-          fi
+          sudo systemctl stop "${svc}" 2>/dev/null || true
+          sudo systemctl disable "${svc}" 2>/dev/null || true
         done
 
         # --- Install tree --------------------------------------------------------
@@ -164,9 +161,9 @@ runs:
           sudo "${INSTALL_DIR}/venv/bin/pip" install ${EXTRA_PIP}
         fi
 
-        # The service user must own the tree so it can write logs and .com files.
-        sudo chown -R "${SERVICE_USER}":"${SERVICE_USER}" "${INSTALL_DIR}" || \
-          sudo chown -R "${SERVICE_USER}" "${INSTALL_DIR}"
+        # The service user must own the tree so it can write logs and .com files
+        # ("user:" sets the group to the user's login group).
+        sudo chown -R "${SERVICE_USER}:" "${INSTALL_DIR}"
 
         # --- Render + install systemd unit files --------------------------------
         render() {

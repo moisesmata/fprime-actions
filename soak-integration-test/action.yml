@@ -1,9 +1,13 @@
 name: "F´ Soak Integration Test"
-description: "Run pytest integration tests against the persistent soak GDS, waiting for the GDS subscription to go live first"
+description: "Run pytest integration tests against the persistent soak GDS"
 inputs:
   dictionary:
-    description: "Path to the deployment dictionary JSON passed to pytest"
+    description: "Path (glob allowed) to the deployment dictionary JSON passed to pytest"
     required: true
+  fsw-service:
+    description: "Optional systemd service name to verify is active before running tests (e.g. fprime-soak-fsw)"
+    required: false
+    default: ""
   test-path:
     description: "Path to the integration test file or directory to run"
     required: true
@@ -23,31 +27,41 @@ inputs:
     description: "Timeout in seconds for the pytest run"
     required: false
     default: "300"
-  settle-timeout:
-    description: "Max seconds to wait for live telemetry before running tests (handles the ZeroMQ slow-joiner against a persistent GDS)"
-    required: false
-    default: "30"
-  settle-seconds:
-    description: "Extra settle seconds after live telemetry is confirmed, so any downlink backlog flushes"
-    required: false
-    default: "5"
 runs:
   using: "composite"
   steps:
     - name: "Soak Integration Test"
       shell: bash
       env:
-        PLUGIN_DIR: ${{ github.action_path }}
         DICTIONARY: ${{ inputs.dictionary }}
+        FSW_SERVICE: ${{ inputs.fsw-service }}
         TEST_PATH: ${{ inputs.test-path }}
         WORKING_DIR: ${{ inputs.working-directory }}
         VENV: ${{ inputs.venv }}
         PYTEST_ARGS: ${{ inputs.pytest-args }}
         TIMEOUT_SECONDS: ${{ inputs.timeout }}
-        SOAK_GDS_SETTLE_TIMEOUT: ${{ inputs.settle-timeout }}
-        SOAK_GDS_SETTLE_SECONDS: ${{ inputs.settle-seconds }}
       run: |
         set -e
+
+        # Verify the flight-software service is up before testing.
+        if [ -n "${FSW_SERVICE}" ]; then
+          if sudo systemctl is-active --quiet "${FSW_SERVICE}"; then
+            echo "[INFO] ${FSW_SERVICE} is running"
+          else
+            echo "::error::${FSW_SERVICE} is not running"
+            sudo systemctl status "${FSW_SERVICE}" --no-pager -l || true
+            sudo journalctl -u "${FSW_SERVICE}" --no-pager -n 40 || true
+            exit 1
+          fi
+        fi
+
+        # Resolve the dictionary.
+        DICT_RESOLVED=$(ls -1 ${DICTIONARY} 2>/dev/null | head -n1 || true)
+        if [ -z "${DICT_RESOLVED}" ]; then
+          echo "::error::No dictionary matched '${DICTIONARY}'"
+          exit 1
+        fi
+        echo "[INFO] Dictionary: ${DICT_RESOLVED}"
 
         if [ -n "${VENV}" ]; then
           echo "[INFO] Activating virtualenv ${VENV}"
@@ -57,16 +71,12 @@ runs:
 
         cd "${WORKING_DIR}"
 
-        # Load the settle plugin without touching the deployment's own conftest.py.
-        export PYTHONPATH="${PLUGIN_DIR}:${PYTHONPATH}"
-
         TIMEOUT_CMD="timeout"
         if ! command -v ${TIMEOUT_CMD} > /dev/null 2>&1; then
           TIMEOUT_CMD="gtimeout"
         fi
 
-        echo "[INFO] Running soak integration tests (settle timeout=${SOAK_GDS_SETTLE_TIMEOUT}s, extra settle=${SOAK_GDS_SETTLE_SECONDS}s)"
+        echo "[INFO] Running soak integration tests"
         ${TIMEOUT_CMD} --kill-after=10s "${TIMEOUT_SECONDS}s" \
-          pytest -p soak_settle_plugin \
-            --dictionary "${DICTIONARY}" \
+          pytest --dictionary "${DICT_RESOLVED}" \
             "${TEST_PATH}" ${PYTEST_ARGS}

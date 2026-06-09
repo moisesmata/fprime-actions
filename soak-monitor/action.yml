@@ -2,7 +2,7 @@ name: "F´ Soak Monitor"
 description: "Analyze soak-test telemetry/events (optional ComLogger .com files) for FATALs, resource thresholds, and degradation trends"
 inputs:
   dictionary:
-    description: "Path to the deployment dictionary JSON used to decode events and channels"
+    description: "Path (glob allowed) to the deployment dictionary JSON used to decode events and channels"
     required: true
   com-logs:
     description: "Optional directory of Svc::ComLogger .com files. Read if present; ignored (not an error) if missing or empty."
@@ -35,11 +35,19 @@ runs:
       run: |
         set -o pipefail
 
+        # Resolve the dictionary 
+        DICT_RESOLVED=$(ls -1 ${DICTIONARY} 2>/dev/null | head -n1 || true)
+        if [ -z "${DICT_RESOLVED}" ]; then
+          echo "::error::No dictionary matched '${DICTIONARY}'"
+          exit 1
+        fi
+        echo "[INFO] Dictionary: ${DICT_RESOLVED}"
+
         # The monitor needs a writable scratch/log directory for the GDS pipeline.
         LOGS_DIR="${LOGS_DIR:-$(mktemp -d)}"
         mkdir -p "${LOGS_DIR}"
 
-        CMD=("${PYTHON_BIN}" "${MONITOR_SCRIPT}" --dictionary "${DICTIONARY}" --logs "${LOGS_DIR}")
+        CMD=("${PYTHON_BIN}" "${MONITOR_SCRIPT}" --dictionary "${DICT_RESOLVED}" --logs "${LOGS_DIR}")
         if [ -n "${COM_LOGS}" ]; then
           CMD+=(--com-logs "${COM_LOGS}")
         fi

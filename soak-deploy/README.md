@@ -5,19 +5,11 @@ self-hosted runner as two **persistent** `systemd` services:
 
 * `<service-prefix>-fsw` &mdash; the flight-software binary.
 * `<service-prefix>-gds` &mdash; a headless `fprime-gds` client that stays
-  connected to the flight software for the entire soak. Keeping the GDS alive
-  between scheduled test runs means it continuously drains the downlink (so no
-  backlog builds up) and is present to capture any FATAL emitted in the gaps
-  between tests.
-
-It is deployment-agnostic: binary, dictionary, ports, framing, and service names
-are all inputs, so the same action deploys any F´ deployment. It expects the
-build artifacts (binary + `dict/`) to already be present in the workspace (e.g.
-downloaded with `actions/download-artifact`).
+  connected to the flight software for the entire soak. 
 
 The systemd unit files are rendered from readable templates
 ([`templates/fsw.service`](templates/fsw.service),
-[`templates/gds.service`](templates/gds.service)) rather than inline heredocs.
+[`templates/gds.service`](templates/gds.service)) 
 
 ## Inputs
 
