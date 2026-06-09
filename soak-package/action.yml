@@ -41,6 +41,8 @@ runs:
         if [ -n "${TEST_SOURCE}" ] && [ -d "${TEST_SOURCE}" ]; then
           mkdir -p "${OUTPUT_DIR}/int"
           cp -r "${TEST_SOURCE}/." "${OUTPUT_DIR}/int/"
+        elif [ -n "${TEST_SOURCE}" ]; then
+          echo "::warning::test-source '${TEST_SOURCE}' not found; artifact will have no integration tests"
         fi
         cp "${REQUIREMENTS}" "${OUTPUT_DIR}/requirements.txt"
         echo "path=${OUTPUT_DIR}" >> "${GITHUB_OUTPUT}"

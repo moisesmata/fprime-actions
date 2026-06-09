@@ -141,6 +141,8 @@ runs:
           sudo rm -rf "${INSTALL_DIR}/test"
           sudo mkdir -p "${INSTALL_DIR}/test"
           sudo cp -r "${TEST_SOURCE}/." "${INSTALL_DIR}/test/"
+        elif [ -n "${TEST_SOURCE}" ]; then
+          echo "::warning::test-source '${TEST_SOURCE}' not found; no integration tests installed"
         fi
 
         COM_LOGS_PATH=""

@@ -63,6 +63,14 @@ runs:
         fi
         echo "[INFO] Dictionary: ${DICT_RESOLVED}"
 
+        if [ ! -e "${TEST_PATH}" ]; then
+          echo "::error::Test path not found: ${TEST_PATH}"
+          echo "Contents of ${WORKING_DIR}/test (if present):"
+          ls -la "${WORKING_DIR}/test" 2>/dev/null || echo "  (directory missing)"
+          echo "Re-run the soak setup workflow to install integration tests."
+          exit 1
+        fi
+
         if [ -n "${VENV}" ]; then
           echo "[INFO] Activating virtualenv ${VENV}"
           # shellcheck disable=SC1091
