@@ -37,11 +37,14 @@ Every numeric channel time-series is fit with a least-squares slope and compared
 first-to-last. Channels are classified by name (case-insensitive substring) to
 distinguish "a number that changed" from "a problem":
 
-| Pattern                                          | Concerning direction | Alert                       |
-|--------------------------------------------------|----------------------|-----------------------------|
-| `memory`, `heap`, `ram`, `mem`                   | rising               | possible resource leak      |
-| `buffer`, `free`, `empty`, `available`, `remaining` | falling              | possible resource depletion |
-| `cpu`, `load`                                    | rising               | rising load trend           |
+| Channel pattern (case-insensitive)              | Concerning direction | Alert                       |
+|-------------------------------------------------|----------------------|-----------------------------|
+| `MEMORY_USED` (Os::SystemResources, KB)         | rising               | possible memory leak        |
+| `NON_VOLATILE_FREE`, `HiBuffs` / `LoBuffs`      | falling              | possible resource depletion |
+| `systemResources.CPU`, `CPU_NN` (percent)       | rising               | rising CPU trend            |
+| `comQueueDepth`, `buffQueueDepth`               | rising               | rising queue depth          |
+
+`MEMORY_TOTAL`, `NON_VOLATILE_TOTAL`, and rate-group timing channels (`RgMaxTime`) are recorded but do not raise trend alerts. CPU channels also trigger an instantaneous alert above 90%.
 
 Thresholds (growth/drop percentages and the minimum sample count) are defined as
 constants at the top of [`scripts/soak_monitor.py`](scripts/soak_monitor.py).

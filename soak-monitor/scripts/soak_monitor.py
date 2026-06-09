@@ -35,18 +35,42 @@ from fprime_gds.common.pipeline.standard import StandardPipeline
 from fprime_gds.common.utils.config_manager import ConfigManager
 from fprime_gds.executables.cli import ParserBase, StandardPipelineParser
 
-# Keywords used to classify numeric channels. Matching is case-insensitive and substring based.
-MEMORY_KEYWORDS = ("memory", "heap", "ram", "mem")
-CPU_KEYWORDS = ("cpu", "load")
-BUFFER_FREE_KEYWORDS = ("buffer", "buff", "free", "empty", "available", "avail", "remaining")
-
-# Thresholds for instantaneous (single-sample) alerts.
-HIGH_UTILIZATION_PERCENT = 90.0
-
 # Trend-analysis tuning.
 MIN_POINTS_FOR_TREND = 5            # need a few samples before a trend is meaningful
 LEAK_GROWTH_PERCENT = 10.0          # resource grew by this much across the window -> alert
 DEPLETION_DROP_PERCENT = 50.0       # free resource dropped by this much -> alert
+
+# Threshold for Os::SystemResources CPU channels (values are percent).
+HIGH_CPU_PERCENT = 90.0
+
+
+def _classify_channel(name: str) -> str:
+    """Classify a channel for trend/threshold rules using F´ telemetry naming.
+
+    Names are matched case-insensitively (Os::SystemResources, Svc::BufferManager, ComQueue, rate groups):
+
+      * ``*.systemResources.MEMORY_USED``     -> memory_usage (KB, rising = leak)
+      * ``*.systemResources.NON_VOLATILE_FREE`` -> free_storage (KB, falling = depletion)
+      * ``*.systemResources.CPU`` / ``CPU_NN`` -> cpu (percent)
+      * ``*BufferManager*.HiBuffs`` etc.      -> buffer_pool (count, falling/0 = exhaustion)
+      * ``*.comQueue.*QueueDepth``            -> queue_depth (rising = backlog)
+      * ``MEMORY_TOTAL`` / ``NON_VOLATILE_TOTAL`` -> baseline (stable capacity, skip alerts)
+    """
+    lname = name.lower()
+
+    if "memory_used" in lname:
+        return "memory_usage"
+    if "non_volatile_free" in lname:
+        return "free_storage"
+    if "memory_total" in lname or "non_volatile_total" in lname:
+        return "baseline"
+    if lname.endswith(".cpu") or ".cpu_" in lname:
+        return "cpu"
+    if any(k in lname for k in ("hibuffs", "lobuffs", "nobuffs", "buffermanager")):
+        return "buffer_pool"
+    if "queuedepth" in lname:
+        return "queue_depth"
+    return "other"
 
 
 class SoakAnalysisResults:
@@ -87,10 +111,11 @@ class SoakAnalysisResults:
         sample. We then classify the channel by name so we can tell the
         difference between "a number that went up" and "a problem":
 
-          * Memory/heap usage that climbs steadily -> possible leak (WARNING).
-          * A free-buffer / free-memory pool that drains steadily -> possible
-            exhaustion (WARNING).
-          * CPU/load that climbs steadily -> rising load (WARNING).
+          * ``MEMORY_USED`` rising steadily -> possible memory leak (WARNING).
+          * ``NON_VOLATILE_FREE`` or buffer-pool counts falling -> possible
+            depletion (WARNING).
+          * ``systemResources.CPU`` / ``CPU_NN`` rising -> rising CPU (WARNING).
+          * ``*QueueDepth`` rising -> queue backlog (WARNING).
 
         Findings are stored on ``self.trends`` for the summary and concerning
         ones additionally raise alerts.
@@ -117,32 +142,33 @@ class SoakAnalysisResults:
             }
             self.trends.append(finding)
 
-            lname = name.lower()
-            is_memory = any(k in lname for k in MEMORY_KEYWORDS)
-            is_cpu = any(k in lname for k in CPU_KEYWORDS)
-            is_free_pool = any(k in lname for k in BUFFER_FREE_KEYWORDS)
+            kind = _classify_channel(name)
             last_ts = readings[-1]["timestamp"]
 
-            # Steadily rising memory usage is the classic soak-test leak signature.
-            if is_memory and slope > 0 and pct_change >= LEAK_GROWTH_PERCENT:
+            if kind == "memory_usage" and slope > 0 and pct_change >= LEAK_GROWTH_PERCENT:
                 self.add_alert(
-                    f"Possible resource leak: {name} rose {pct_change:.1f}% over "
+                    f"Possible memory leak: {name} rose {pct_change:.1f}% over "
                     f"{len(values)} samples ({first:g} -> {last:g})",
                     "WARNING",
                     last_ts,
                 )
-            # A free pool that keeps draining will eventually exhaust.
-            elif is_free_pool and slope < 0 and pct_change <= -DEPLETION_DROP_PERCENT:
+            elif kind in ("free_storage", "buffer_pool") and slope < 0 and pct_change <= -DEPLETION_DROP_PERCENT:
                 self.add_alert(
                     f"Possible resource depletion: {name} fell {abs(pct_change):.1f}% "
                     f"over {len(values)} samples ({first:g} -> {last:g})",
                     "WARNING",
                     last_ts,
                 )
-            # Rising CPU/load over a long soak is worth surfacing.
-            elif is_cpu and slope > 0 and pct_change >= LEAK_GROWTH_PERCENT:
+            elif kind == "cpu" and slope > 0 and pct_change >= LEAK_GROWTH_PERCENT:
                 self.add_alert(
-                    f"Rising load trend: {name} climbed {pct_change:.1f}% over "
+                    f"Rising CPU trend: {name} climbed {pct_change:.1f}% over "
+                    f"{len(values)} samples ({first:g} -> {last:g})",
+                    "WARNING",
+                    last_ts,
+                )
+            elif kind == "queue_depth" and slope > 0 and pct_change >= LEAK_GROWTH_PERCENT:
+                self.add_alert(
+                    f"Rising queue depth: {name} climbed {pct_change:.1f}% over "
                     f"{len(values)} samples ({first:g} -> {last:g})",
                     "WARNING",
                     last_ts,
@@ -245,27 +271,18 @@ class ChannelCollector(DataHandler):
             # Record every numeric channel so trend analysis is deployment-agnostic.
             self.results.record_metric(ch_name, value, timestamp)
 
-            # Instantaneous, name-based threshold alerts.
-            lname = ch_name.lower()
-            is_free_pool = any(k in lname for k in BUFFER_FREE_KEYWORDS)
-            is_cpu = any(k in lname for k in CPU_KEYWORDS)
-            is_memory = any(k in lname for k in MEMORY_KEYWORDS)
+            # Instantaneous threshold alerts (channel kind from F´ naming conventions).
+            kind = _classify_channel(ch_name)
 
-            if is_free_pool and value == 0:
+            if kind == "buffer_pool" and value == 0:
                 self.results.add_alert(
-                    f"Buffer/resource exhaustion detected: {ch_name} = {value:g}",
+                    f"Buffer pool exhausted: {ch_name} = {value:g}",
                     "WARNING",
                     timestamp,
                 )
-            elif is_cpu and value > HIGH_UTILIZATION_PERCENT:
+            elif kind == "cpu" and value > HIGH_CPU_PERCENT:
                 self.results.add_alert(
-                    f"High CPU usage detected: {ch_name} = {value:g}%",
-                    "WARNING",
-                    timestamp,
-                )
-            elif is_memory and value > HIGH_UTILIZATION_PERCENT:
-                self.results.add_alert(
-                    f"High memory usage detected: {ch_name} = {value:g}%",
+                    f"High CPU usage: {ch_name} = {value:g}%",
                     "WARNING",
                     timestamp,
                 )
