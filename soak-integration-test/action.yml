@@ -1,0 +1,72 @@
+name: "F´ Soak Integration Test"
+description: "Run pytest integration tests against the persistent soak GDS, waiting for the GDS subscription to go live first"
+inputs:
+  dictionary:
+    description: "Path to the deployment dictionary JSON passed to pytest"
+    required: true
+  test-path:
+    description: "Path to the integration test file or directory to run"
+    required: true
+  working-directory:
+    description: "Directory to run pytest from"
+    required: false
+    default: "."
+  venv:
+    description: "Path to a virtualenv to activate before running pytest (use the persistent soak venv so it shares fprime-gds). Leave empty to use the ambient environment."
+    required: false
+    default: ""
+  pytest-args:
+    description: "Extra arguments passed to pytest (e.g. --deployment-config path)"
+    required: false
+    default: ""
+  timeout:
+    description: "Timeout in seconds for the pytest run"
+    required: false
+    default: "300"
+  settle-timeout:
+    description: "Max seconds to wait for live telemetry before running tests (handles the ZeroMQ slow-joiner against a persistent GDS)"
+    required: false
+    default: "30"
+  settle-seconds:
+    description: "Extra settle seconds after live telemetry is confirmed, so any downlink backlog flushes"
+    required: false
+    default: "5"
+runs:
+  using: "composite"
+  steps:
+    - name: "Soak Integration Test"
+      shell: bash
+      env:
+        PLUGIN_DIR: ${{ github.action_path }}
+        DICTIONARY: ${{ inputs.dictionary }}
+        TEST_PATH: ${{ inputs.test-path }}
+        WORKING_DIR: ${{ inputs.working-directory }}
+        VENV: ${{ inputs.venv }}
+        PYTEST_ARGS: ${{ inputs.pytest-args }}
+        TIMEOUT_SECONDS: ${{ inputs.timeout }}
+        SOAK_GDS_SETTLE_TIMEOUT: ${{ inputs.settle-timeout }}
+        SOAK_GDS_SETTLE_SECONDS: ${{ inputs.settle-seconds }}
+      run: |
+        set -e
+
+        if [ -n "${VENV}" ]; then
+          echo "[INFO] Activating virtualenv ${VENV}"
+          # shellcheck disable=SC1091
+          . "${VENV}/bin/activate"
+        fi
+
+        cd "${WORKING_DIR}"
+
+        # Load the settle plugin without touching the deployment's own conftest.py.
+        export PYTHONPATH="${PLUGIN_DIR}:${PYTHONPATH}"
+
+        TIMEOUT_CMD="timeout"
+        if ! command -v ${TIMEOUT_CMD} > /dev/null 2>&1; then
+          TIMEOUT_CMD="gtimeout"
+        fi
+
+        echo "[INFO] Running soak integration tests (settle timeout=${SOAK_GDS_SETTLE_TIMEOUT}s, extra settle=${SOAK_GDS_SETTLE_SECONDS}s)"
+        ${TIMEOUT_CMD} --kill-after=10s "${TIMEOUT_SECONDS}s" \
+          pytest -p soak_settle_plugin \
+            --dictionary "${DICTIONARY}" \
+            "${TEST_PATH}" ${PYTEST_ARGS}

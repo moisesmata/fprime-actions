@@ -1,0 +1,61 @@
+name: "F´ Soak Monitor"
+description: "Analyze soak-test telemetry/events (optional ComLogger .com files) for FATALs, resource thresholds, and degradation trends"
+inputs:
+  dictionary:
+    description: "Path to the deployment dictionary JSON used to decode events and channels"
+    required: true
+  com-logs:
+    description: "Optional directory of Svc::ComLogger .com files. Read if present; ignored (not an error) if missing or empty."
+    required: false
+    default: ""
+  python:
+    description: "Python interpreter to run the monitor with (point at the soak virtualenv to reuse its fprime-gds)"
+    required: false
+    default: "python3"
+  logs-dir:
+    description: "Directory the monitor uses for its own GDS logging prefix / scratch files"
+    required: false
+    default: ""
+  fail-on-fatal:
+    description: "Fail the step when a FATAL event is detected"
+    required: false
+    default: "true"
+runs:
+  using: "composite"
+  steps:
+    - name: "Soak Monitor"
+      shell: bash
+      env:
+        MONITOR_SCRIPT: ${{ github.action_path }}/scripts/soak_monitor.py
+        DICTIONARY: ${{ inputs.dictionary }}
+        COM_LOGS: ${{ inputs.com-logs }}
+        PYTHON_BIN: ${{ inputs.python }}
+        LOGS_DIR: ${{ inputs.logs-dir }}
+        FAIL_ON_FATAL: ${{ inputs.fail-on-fatal }}
+      run: |
+        set -o pipefail
+
+        # The monitor needs a writable scratch/log directory for the GDS pipeline.
+        LOGS_DIR="${LOGS_DIR:-$(mktemp -d)}"
+        mkdir -p "${LOGS_DIR}"
+
+        CMD=("${PYTHON_BIN}" "${MONITOR_SCRIPT}" --dictionary "${DICTIONARY}" --logs "${LOGS_DIR}")
+        if [ -n "${COM_LOGS}" ]; then
+          CMD+=(--com-logs "${COM_LOGS}")
+        fi
+
+        echo "[INFO] Running soak monitor: ${CMD[*]}"
+        set +e
+        "${CMD[@]}"
+        RET=$?
+        set -e
+
+        if [ ${RET} -ne 0 ]; then
+          if [ "${FAIL_ON_FATAL}" = "true" ]; then
+            echo "::error::Soak monitor detected a FATAL condition (exit code ${RET})"
+            exit ${RET}
+          else
+            echo "::warning::Soak monitor detected a FATAL condition (exit code ${RET}); fail-on-fatal is disabled"
+          fi
+        fi
+        echo "[INFO] Soak monitor finished"

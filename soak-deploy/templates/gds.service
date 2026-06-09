@@ -1,0 +1,20 @@
+[Unit]
+Description=F' soak-test GDS, persistent (__SERVICE_PREFIX__)
+# Keep the GDS alive for the entire soak so it stays connected to the flight
+# software between scheduled test runs and continuously captures downlink
+# (including any FATAL emitted in the gaps between tests).
+After=network.target __FSW_SERVICE_NAME__.service
+Wants=__FSW_SERVICE_NAME__.service
+
+[Service]
+Type=simple
+User=__SERVICE_USER__
+WorkingDirectory=__INSTALL_DIR__
+ExecStart=__INSTALL_DIR__/venv/bin/fprime-gds --ip-client --ip-address __GDS_CONNECT_ADDRESS__ --ip-port __FSW_PORT__ -n -g none -d __INSTALL_DIR__ --logs __INSTALL_DIR__/gds-logs __GDS_EXTRA_ARGS__
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

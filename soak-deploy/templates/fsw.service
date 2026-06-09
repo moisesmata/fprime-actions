@@ -1,0 +1,16 @@
+[Unit]
+Description=F' soak-test flight software (__SERVICE_PREFIX__)
+After=network.target
+
+[Service]
+Type=simple
+User=__SERVICE_USER__
+WorkingDirectory=__INSTALL_DIR__
+ExecStart=__INSTALL_DIR__/bin/__BINARY_NAME__ -a __FSW_BIND_ADDRESS__ -p __FSW_PORT__ __FSW_EXTRA_ARGS__
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
