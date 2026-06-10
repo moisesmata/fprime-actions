@@ -1,0 +1,11 @@
+# Rendered by nasa/fprime-actions/soak-deploy. fprime-gds reads this from the
+# working directory at startup; see fprime_gds.executables.cli.ConfigDrivenParser.
+command-line-options:
+  ip-client: true
+  ip-address: __GDS_CONNECT_ADDRESS__
+  ip-port: __FSW_PORT__
+  no-app: true
+  gui: none
+  deployment: __INSTALL_DIR__
+  logs: __INSTALL_DIR__/gds-logs
+__FRAMING_SELECTION_LINE__

@@ -9,8 +9,10 @@ Wants=__FSW_SERVICE_NAME__.service
 [Service]
 Type=simple
 User=__SERVICE_USER__
+# fprime-gds reads command-line options from fprime-gds.yml in the working
+# directory; see __INSTALL_DIR__/fprime-gds.yml for the rendered config.
 WorkingDirectory=__INSTALL_DIR__
-ExecStart=__INSTALL_DIR__/venv/bin/fprime-gds --ip-client --ip-address __GDS_CONNECT_ADDRESS__ --ip-port __FSW_PORT__ -n -g none -d __INSTALL_DIR__ --logs __INSTALL_DIR__/gds-logs __GDS_EXTRA_ARGS__
+ExecStart=__INSTALL_DIR__/venv/bin/fprime-gds
 Restart=always
 RestartSec=5
 StandardOutput=journal

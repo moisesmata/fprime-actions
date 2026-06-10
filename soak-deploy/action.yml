@@ -2,9 +2,9 @@ name: "F´ Soak Deploy"
 description: "Install a built F´ deployment as persistent flight-software and GDS systemd services for soak testing"
 inputs:
   install-dir:
-    description: "Directory to install the soak deployment into"
+    description: "Directory to install the soak deployment into (must be writable by the runner user; defaults to $HOME/fprime-soak)"
     required: false
-    default: "/opt/fprime-soak"
+    default: ""
   binary:
     description: "Path (glob allowed) to the built flight-software binary to install, relative to the workspace"
     required: true
@@ -50,8 +50,8 @@ inputs:
     description: "Address the persistent GDS connects to (the flight software's address)"
     required: false
     default: "127.0.0.1"
-  gds-extra-args:
-    description: "Extra arguments appended to fprime-gds (e.g. --framing-selection space-packet-space-data-link)"
+  framing-selection:
+    description: "fprime-gds --framing-selection value (e.g. space-packet-space-data-link). Empty omits the option."
     required: false
     default: ""
   com-logger-subdir:
@@ -84,7 +84,7 @@ runs:
       id: deploy
       shell: bash
       env:
-        TEMPLATES_DIR: ${{ github.action_path }}/templates
+        ACTION_PATH: ${{ github.action_path }}
         INSTALL_DIR: ${{ inputs.install-dir }}
         BINARY_GLOB: ${{ inputs.binary }}
         BINARY_NAME: ${{ inputs.install-binary-name }}
@@ -98,130 +98,6 @@ runs:
         FSW_PORT: ${{ inputs.fsw-port }}
         FSW_EXTRA_ARGS: ${{ inputs.fsw-extra-args }}
         GDS_CONNECT_ADDRESS: ${{ inputs.gds-connect-address }}
-        GDS_EXTRA_ARGS: ${{ inputs.gds-extra-args }}
+        FRAMING_SELECTION: ${{ inputs.framing-selection }}
         COM_LOGGER_SUBDIR: ${{ inputs.com-logger-subdir }}
-      run: |
-        set -e
-
-        SERVICE_USER="${SERVICE_USER_INPUT:-$(whoami)}"
-        FSW_SERVICE="${SERVICE_PREFIX}-fsw"
-        GDS_SERVICE="${SERVICE_PREFIX}-gds"
-
-        # --- Resolve build artifacts (globs allowed) ----------------------------
-        BINARY_RESOLVED=$(ls -1 ${BINARY_GLOB} 2>/dev/null | head -n1 || true)
-        if [ -z "${BINARY_RESOLVED}" ]; then
-          echo "::error::No flight-software binary matched '${BINARY_GLOB}'"
-          exit 1
-        fi
-        DICT_RESOLVED=$(ls -1 ${DICTIONARY_GLOB} 2>/dev/null | head -n1 || true)
-        if [ -z "${DICT_RESOLVED}" ]; then
-          echo "::error::No dictionary matched '${DICTIONARY_GLOB}'"
-          exit 1
-        fi
-        DICT_SRC_DIR=$(dirname "${DICT_RESOLVED}")
-        DICT_BASENAME=$(basename "${DICT_RESOLVED}")
-        echo "[INFO] Binary:     ${BINARY_RESOLVED}"
-        echo "[INFO] Dictionary: ${DICT_RESOLVED}"
-
-        # --- Stop any previous soak services so we get a clean slot -------------
-        for svc in "${FSW_SERVICE}" "${GDS_SERVICE}"; do
-          sudo systemctl stop "${svc}" 2>/dev/null || true
-          sudo systemctl disable "${svc}" 2>/dev/null || true
-        done
-
-        # --- Install tree --------------------------------------------------------
-        echo "[INFO] Installing into ${INSTALL_DIR}"
-        sudo mkdir -p "${INSTALL_DIR}/bin" "${INSTALL_DIR}/dict" "${INSTALL_DIR}/gds-logs"
-        sudo cp "${BINARY_RESOLVED}" "${INSTALL_DIR}/bin/${BINARY_NAME}"
-        sudo chmod +x "${INSTALL_DIR}/bin/${BINARY_NAME}"
-        sudo cp -r "${DICT_SRC_DIR}/." "${INSTALL_DIR}/dict/"
-
-        if [ -n "${TEST_SOURCE}" ] && [ -d "${TEST_SOURCE}" ]; then
-          echo "[INFO] Installing integration tests from ${TEST_SOURCE}"
-          sudo rm -rf "${INSTALL_DIR}/test"
-          sudo mkdir -p "${INSTALL_DIR}/test"
-          sudo cp -r "${TEST_SOURCE}/." "${INSTALL_DIR}/test/"
-        elif [ -n "${TEST_SOURCE}" ]; then
-          echo "::warning::test-source '${TEST_SOURCE}' not found; no integration tests installed"
-        fi
-
-        COM_LOGS_PATH=""
-        if [ -n "${COM_LOGGER_SUBDIR}" ]; then
-          COM_LOGS_PATH="${INSTALL_DIR}/${COM_LOGGER_SUBDIR}"
-          echo "[INFO] Preparing ComLogger directory ${COM_LOGS_PATH}"
-          sudo rm -rf "${COM_LOGS_PATH}"
-          sudo mkdir -p "${COM_LOGS_PATH}"
-        fi
-
-        # --- Virtualenv ----------------------------------------------------------
-        echo "[INFO] Building virtualenv at ${INSTALL_DIR}/venv"
-        sudo rm -rf "${INSTALL_DIR}/venv"
-        sudo python3 -m venv "${INSTALL_DIR}/venv"
-        sudo "${INSTALL_DIR}/venv/bin/pip" install -U pip wheel setuptools
-        sudo "${INSTALL_DIR}/venv/bin/pip" install -r "${REQUIREMENTS}"
-        if [ -n "${EXTRA_PIP}" ]; then
-          sudo "${INSTALL_DIR}/venv/bin/pip" install ${EXTRA_PIP}
-        fi
-
-        # The service user must own the tree so it can write logs and .com files
-        # ("user:" sets the group to the user's login group).
-        sudo chown -R "${SERVICE_USER}:" "${INSTALL_DIR}"
-
-        # --- Render + install systemd unit files --------------------------------
-        render() {
-          sed \
-            -e "s#__INSTALL_DIR__#${INSTALL_DIR}#g" \
-            -e "s#__SERVICE_USER__#${SERVICE_USER}#g" \
-            -e "s#__SERVICE_PREFIX__#${SERVICE_PREFIX}#g" \
-            -e "s#__BINARY_NAME__#${BINARY_NAME}#g" \
-            -e "s#__FSW_BIND_ADDRESS__#${FSW_BIND_ADDRESS}#g" \
-            -e "s#__FSW_PORT__#${FSW_PORT}#g" \
-            -e "s#__FSW_EXTRA_ARGS__#${FSW_EXTRA_ARGS}#g" \
-            -e "s#__FSW_SERVICE_NAME__#${FSW_SERVICE}#g" \
-            -e "s#__GDS_CONNECT_ADDRESS__#${GDS_CONNECT_ADDRESS}#g" \
-            -e "s#__GDS_EXTRA_ARGS__#${GDS_EXTRA_ARGS}#g" \
-            "$1"
-        }
-
-        echo "[INFO] Installing ${FSW_SERVICE}.service"
-        render "${TEMPLATES_DIR}/fsw.service" | sudo tee "/etc/systemd/system/${FSW_SERVICE}.service" > /dev/null
-        echo "[INFO] Installing ${GDS_SERVICE}.service"
-        render "${TEMPLATES_DIR}/gds.service" | sudo tee "/etc/systemd/system/${GDS_SERVICE}.service" > /dev/null
-
-        echo "::group::${FSW_SERVICE}.service"
-        cat "/etc/systemd/system/${FSW_SERVICE}.service"
-        echo "::endgroup::"
-        echo "::group::${GDS_SERVICE}.service"
-        cat "/etc/systemd/system/${GDS_SERVICE}.service"
-        echo "::endgroup::"
-
-        # --- Start services ------------------------------------------------------
-        sudo systemctl daemon-reload
-        sudo systemctl enable "${FSW_SERVICE}" "${GDS_SERVICE}"
-        sudo systemctl restart "${FSW_SERVICE}"
-        sleep 3
-        sudo systemctl restart "${GDS_SERVICE}"
-        sleep 5
-
-        for svc in "${FSW_SERVICE}" "${GDS_SERVICE}"; do
-          if sudo systemctl is-active --quiet "${svc}"; then
-            echo "[INFO] ${svc} is active"
-          else
-            echo "::error::${svc} failed to start"
-            sudo systemctl status "${svc}" --no-pager -l || true
-            sudo journalctl -u "${svc}" --no-pager -n 40 || true
-            exit 1
-          fi
-        done
-
-        # --- Outputs -------------------------------------------------------------
-        {
-          echo "install-dir=${INSTALL_DIR}"
-          echo "venv=${INSTALL_DIR}/venv"
-          echo "dictionary=${INSTALL_DIR}/dict/${DICT_BASENAME}"
-          echo "com-logs=${COM_LOGS_PATH}"
-          echo "fsw-service=${FSW_SERVICE}"
-          echo "gds-service=${GDS_SERVICE}"
-        } >> "${GITHUB_OUTPUT}"
-
-        echo "[INFO] Soak deploy complete: ${FSW_SERVICE} + persistent ${GDS_SERVICE}"
+      run: ${{ github.action_path }}/scripts/deploy.sh
