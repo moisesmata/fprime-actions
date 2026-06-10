@@ -1,103 +1,16 @@
 name: "F´ Soak Deploy"
 description: "Install a built F´ deployment as persistent flight-software and GDS systemd services for soak testing"
 inputs:
-  install-dir:
-    description: "Directory to install the soak deployment into (must be writable by the runner user; defaults to $HOME/fprime-soak)"
+  gds-args:
+    description: "Extra arguments appended to fprime-gds (e.g. '--framing-selection fprime-framing')."
     required: false
     default: ""
-  binary:
-    description: "Path (glob allowed) to the built flight-software binary to install, relative to the workspace"
-    required: true
-  install-binary-name:
-    description: "Name to install the flight-software binary as (keeps the service ExecStart stable across deployment renames)"
-    required: false
-    default: "fsw"
-  dictionary:
-    description: "Path (glob allowed) to the deployment topology dictionary JSON, relative to the workspace"
-    required: true
-  requirements:
-    description: "Path to a requirements.txt used to build the soak virtualenv (must install fprime-gds)"
-    required: true
-  extra-pip-packages:
-    description: "Extra pip packages to install into the soak virtualenv (space-separated, e.g. psutil)"
-    required: false
-    default: ""
-  test-source:
-    description: "Optional directory of integration tests to install (copied into <install-dir>/test)"
-    required: false
-    default: ""
-  service-prefix:
-    description: "Prefix for the systemd service names (<prefix>-fsw, <prefix>-gds)"
-    required: false
-    default: "fprime-soak"
-  service-user:
-    description: "Linux user to run the services as (defaults to the current user)"
-    required: false
-    default: ""
-  fsw-bind-address:
-    description: "Address the flight-software binary binds for the GDS TCP connection"
-    required: false
-    default: "0.0.0.0"
-  fsw-port:
-    description: "TCP port the flight-software binary listens on"
-    required: false
-    default: "50000"
-  fsw-extra-args:
-    description: "Extra arguments appended to the flight-software ExecStart"
-    required: false
-    default: ""
-  gds-connect-address:
-    description: "Address the persistent GDS connects to (the flight software's address)"
-    required: false
-    default: "127.0.0.1"
-  framing-selection:
-    description: "fprime-gds --framing-selection value (e.g. space-packet-space-data-link). Empty omits the option."
-    required: false
-    default: ""
-  com-logger-subdir:
-    description: "Subdirectory under <install-dir> where the FSW ComLogger writes .com files (created and cleared on deploy). Leave empty to skip."
-    required: false
-    default: "ComLoggerFiles"
-outputs:
-  install-dir:
-    description: "Absolute install directory"
-    value: ${{ steps.deploy.outputs.install-dir }}
-  venv:
-    description: "Path to the soak virtualenv"
-    value: ${{ steps.deploy.outputs.venv }}
-  dictionary:
-    description: "Absolute path to the installed dictionary JSON"
-    value: ${{ steps.deploy.outputs.dictionary }}
-  com-logs:
-    description: "Absolute path to the ComLogger directory (empty if disabled)"
-    value: ${{ steps.deploy.outputs.com-logs }}
-  fsw-service:
-    description: "Name of the installed flight-software systemd service"
-    value: ${{ steps.deploy.outputs.fsw-service }}
-  gds-service:
-    description: "Name of the installed persistent GDS systemd service"
-    value: ${{ steps.deploy.outputs.gds-service }}
 runs:
   using: "composite"
   steps:
     - name: "Deploy soak services"
-      id: deploy
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
-        INSTALL_DIR: ${{ inputs.install-dir }}
-        BINARY_GLOB: ${{ inputs.binary }}
-        BINARY_NAME: ${{ inputs.install-binary-name }}
-        DICTIONARY_GLOB: ${{ inputs.dictionary }}
-        REQUIREMENTS: ${{ inputs.requirements }}
-        EXTRA_PIP: ${{ inputs.extra-pip-packages }}
-        TEST_SOURCE: ${{ inputs.test-source }}
-        SERVICE_PREFIX: ${{ inputs.service-prefix }}
-        SERVICE_USER_INPUT: ${{ inputs.service-user }}
-        FSW_BIND_ADDRESS: ${{ inputs.fsw-bind-address }}
-        FSW_PORT: ${{ inputs.fsw-port }}
-        FSW_EXTRA_ARGS: ${{ inputs.fsw-extra-args }}
-        GDS_CONNECT_ADDRESS: ${{ inputs.gds-connect-address }}
-        FRAMING_SELECTION: ${{ inputs.framing-selection }}
-        COM_LOGGER_SUBDIR: ${{ inputs.com-logger-subdir }}
+        GDS_ARGS: ${{ inputs.gds-args }}
       run: ${{ github.action_path }}/scripts/deploy.sh
