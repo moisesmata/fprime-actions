@@ -23,8 +23,7 @@ chmod +x "${INSTALL_DIR}/bin/fsw"
 
 python3 -m venv --clear "${INSTALL_DIR}/venv"
 "${INSTALL_DIR}/venv/bin/pip" install -q -U pip wheel setuptools
-# psutil is needed by soak-monitor's python script
-"${INSTALL_DIR}/venv/bin/pip" install -q -r artifacts/lib/fprime/requirements.txt psutil
+"${INSTALL_DIR}/venv/bin/pip" install -q -r artifacts/lib/fprime/requirements.txt
 
 # fprime-gds reads command-line-options from fprime-gds.yml in WorkingDirectory.
 sed -e "s#__INSTALL_DIR__#${INSTALL_DIR}#g" \
