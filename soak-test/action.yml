@@ -1,0 +1,10 @@
+name: "F´ Soak Test"
+description: "Analyze accumulated soak telemetry for FATALs/degradation, then run integration tests against the persistent GDS"
+runs:
+  using: "composite"
+  steps:
+    - name: "Run soak test"
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: ${{ github.action_path }}/scripts/test.sh
