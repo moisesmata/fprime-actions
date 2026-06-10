@@ -5,7 +5,7 @@
 set -euo pipefail
 
 INSTALL_DIR="${HOME}/fprime-soak"
-DICT="${INSTALL_DIR}"/dict/*"
+DICT=$(ls "${INSTALL_DIR}"/dict/*TopologyDictionary.json | head -n1)
 
 sudo systemctl is-active --quiet fprime-soak-fsw \
   || { echo "::error::fprime-soak-fsw is not active"; exit 1; }
@@ -17,6 +17,6 @@ echo "[INFO] Analyzing soak telemetry"
   --com-logs "${INSTALL_DIR}/ComLoggerFiles"
 
 echo "[INFO] Running integration tests"
-cd "${INSTALL_DIR}"
-. venv/bin/activate
-pytest --dictionary "${DICT}" test/
+cd "${INSTALL_DIR}/test"
+. "${INSTALL_DIR}/venv/bin/activate"
+pytest
