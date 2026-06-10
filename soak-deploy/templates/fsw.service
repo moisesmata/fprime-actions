@@ -1,12 +1,12 @@
 [Unit]
-Description=F' soak-test flight software (__SERVICE_PREFIX__)
+Description=F' soak-test flight software
 After=network.target
 
 [Service]
 Type=simple
 User=__SERVICE_USER__
 WorkingDirectory=__INSTALL_DIR__
-ExecStart=__INSTALL_DIR__/bin/__BINARY_NAME__ -a 0.0.0.0 -p 50000
+ExecStart=__INSTALL_DIR__/bin/fsw -a 0.0.0.0 -p 50000
 Restart=always
 RestartSec=5
 StandardOutput=journal

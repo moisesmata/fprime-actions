@@ -1,17 +1,12 @@
 [Unit]
-Description=F' soak-test GDS, persistent (__SERVICE_PREFIX__)
-# Keep the GDS alive for the entire soak so it stays connected to the flight
-# software between scheduled test runs and continuously captures downlink
-# (including any FATAL emitted in the gaps between tests).
-After=network.target __FSW_SERVICE_NAME__.service
-Wants=__FSW_SERVICE_NAME__.service
+Description=F' soak-test GDS
+After=network.target fprime-soak-fsw.service
+Wants=fprime-soak-fsw.service
 
 [Service]
 Type=simple
 User=__SERVICE_USER__
-# fprime-gds reads command-line options from fprime-gds.yml in the working
-# directory; see __INSTALL_DIR__/fprime-gds.yml for the rendered config.
-# __GDS_ARGS__ is the action's gds-args input (deployment-specific overrides).
+# fprime-gds reads command-line options from fprime-gds.yml in WorkingDirectory.
 WorkingDirectory=__INSTALL_DIR__
 ExecStart=__INSTALL_DIR__/venv/bin/fprime-gds __GDS_ARGS__
 Restart=always
