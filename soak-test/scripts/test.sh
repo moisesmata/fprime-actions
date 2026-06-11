@@ -21,4 +21,6 @@ cd "${INSTALL_DIR}/test"
 . "${INSTALL_DIR}/venv/bin/activate"
 # Override pytest's default python_files=test_*.py so deployments that name
 # tests <something>_integration_tests.py (e.g. led-blinker) still get collected.
-pytest -o python_files='*.py'
+# --dictionary is required by fprime-gds's StandardPipelineParser, which the
+# fprime_test_api fixture invokes when no settings.ini lives above CWD.
+pytest -o python_files='*.py' --dictionary "${DICT}"
