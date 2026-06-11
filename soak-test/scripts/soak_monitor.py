@@ -61,7 +61,9 @@ class Results:
 
     def add_channel(self, ch):
         self.channels += 1
-        value = _to_float(ch.val)
+        # fprime-gds 4.x: ChData stores the value object at .val_obj; the
+        # scalar lives at .val_obj.val. .get_val() is the public accessor.
+        value = _to_float(ch.get_val())
         if value is None:
             return
         name = ch.template.name
