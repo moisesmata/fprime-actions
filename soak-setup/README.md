@@ -1,6 +1,6 @@
-# nasa/fprime-actions/soak-deploy
+# nasa/fprime-actions/soak-setup
 
-The `soak-deploy` action installs a previously-built F´ deployment onto a
+The `soak-setup` action installs a previously-built F´ deployment onto a
 self-hosted runner:
 
 The install tree (`$HOME/fprime-soak`) is owned by the runner user. 
@@ -44,7 +44,7 @@ The calling workflow is responsible for staging `int/` and `requirements.txt` be
   with:
     name: my-soak-artifact
     path: artifacts
-- uses: nasa/fprime-actions/soak-deploy@devel
+- uses: nasa/fprime-actions/soak-setup@devel
 ```
 
 > For Linux: Requires a self-hosted runner with `sudo` (for `systemctl` only) and `systemd`.

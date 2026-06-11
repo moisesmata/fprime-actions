@@ -4,7 +4,7 @@ The `soak-test` action runs the periodic half of a soak: analyze data captured
 by the persistent FSW + GDS services for health/resource/stability problems,
 then run the deployment's integration tests against the still-running GDS.
 
-It pairs with [`soak-deploy`](../soak-deploy/) and assumes its conventions
+It pairs with [`soak-setup`](../soak-setup/) and assumes its conventions
 (`$HOME/fprime-soak/{venv,dict,ComLoggerFiles,test}`, FSW systemd service
 `fprime-soak-fsw`). No inputs.
 
