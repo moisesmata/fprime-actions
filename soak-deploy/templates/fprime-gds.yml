@@ -1,7 +1,8 @@
 command-line-options:
-  ip-client: true
+  # store_true flags: use null so the parser emits just `--flag` without a value.
+  ip-client: null
+  no-app: null
   ip-address: 127.0.0.1
-  no-app: true
   gui: none
   deployment: __INSTALL_DIR__
   logs: __INSTALL_DIR__/gds-logs
