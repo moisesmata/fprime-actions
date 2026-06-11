@@ -22,7 +22,24 @@ done
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now fprime-soak-fsw fprime-soak-gds
-sleep 5
+
+# systemctl is-active returns true the instant Type=simple exec()s, which is
+# before FSW has bound port 50000 (and after a redeploy, the kernel holds the
+# previous socket in TCP TIME_WAIT for ~60s, so binding can take a minute).
+# Poll the port itself so a downstream test step doesn't race the FSW.
+echo "[INFO] Waiting for FSW to bind 127.0.0.1:50000"
+for i in $(seq 1 90); do
+  if ss -ltn 'sport = :50000' | grep -q LISTEN; then
+    echo "[INFO] FSW listening on 50000 (after ${i}s)"
+    break
+  fi
+  if [ "$i" -eq 90 ]; then
+    echo "::error::FSW never bound port 50000 within 90s"
+    sudo journalctl -u fprime-soak-fsw --no-pager -n 60 || true
+    exit 1
+  fi
+  sleep 1
+done
 
 for svc in fprime-soak-fsw fprime-soak-gds; do
   sudo systemctl is-active --quiet "${svc}" && { echo "[INFO] ${svc} is active"; continue; }
