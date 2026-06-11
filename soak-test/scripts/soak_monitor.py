@@ -57,12 +57,12 @@ class Results:
         if sev == "EventSeverity.FATAL":
             self.alert("FATAL", body, ts)
         elif sev == "EventSeverity.WARNING_HI":
-            self.alert("WARNING", body, ts)
+            self.alert("WARNING_HI", body, ts)
+        elif sev == "EventSeverity.WARNING_LO":
+            self.alert("WARNING_LO", body, ts)
 
     def add_channel(self, ch):
         self.channels += 1
-        # fprime-gds 4.x: ChData stores the value object at .val_obj; the
-        # scalar lives at .val_obj.val. .get_val() is the public accessor.
         value = _to_float(ch.get_val())
         if value is None:
             return
@@ -72,9 +72,9 @@ class Results:
         self.last_ts[name] = ts
         kind = _classify(name)
         if kind == "buffer_pool" and value == 0:
-            self.alert("WARNING", f"Buffer pool exhausted: {name} = 0", ts)
+            self.alert("WARNING_HI", f"Buffer pool exhausted: {name} = 0", ts)
         elif kind == "cpu" and value > HIGH_CPU_PERCENT:
-            self.alert("WARNING", f"High CPU usage: {name} = {value:g}%", ts)
+            self.alert("WARNING_LO", f"High CPU usage: {name} = {value:g}%", ts)
 
     def analyze_trends(self):
         for name, vals in self.values.items():
@@ -89,13 +89,13 @@ class Results:
             ts = self.last_ts[name]
             base = f"{name}: {first:g} -> {last:g} ({pct:+.1f}% over {len(vals)} samples)"
             if kind == "memory_usage" and pct >= LEAK_GROWTH_PERCENT:
-                self.alert("WARNING", f"Possible memory leak: {base}", ts)
+                self.alert("WARNING_LO", f"Possible memory leak: {base}", ts)
             elif kind in ("free_storage", "buffer_pool") and pct <= -DEPLETION_DROP_PERCENT:
-                self.alert("WARNING", f"Possible resource depletion: {base}", ts)
+                self.alert("WARNING_HI", f"Possible resource depletion: {base}", ts)
             elif kind == "cpu" and pct >= LEAK_GROWTH_PERCENT:
-                self.alert("WARNING", f"Rising CPU trend: {base}", ts)
+                self.alert("WARNING_LO", f"Rising CPU trend: {base}", ts)
             elif kind == "queue_depth" and pct >= LEAK_GROWTH_PERCENT:
-                self.alert("WARNING", f"Rising queue depth: {base}", ts)
+                self.alert("WARNING_HI", f"Rising queue depth: {base}", ts)
 
 
 class _Handler(DataHandler):
@@ -141,20 +141,15 @@ def make_pipeline(args, config) -> StandardPipeline:
     distributor.on_recv(), so disconnect() afterwards lets the process exit."""
     p = StandardPipeline()
     p.transport_implementation = args.connection_transport
-    try:
-        p.setup(config=config, dictionaries=args.dictionaries,
-                file_store=args.files_storage_directory,
-                logging_prefix=args.logs, data_logging_enabled=False)
-    finally:
-        try: p.disconnect()
-        except Exception: pass
+    p.setup(config=config, dictionaries=args.dictionaries,
+            file_store=args.files_storage_directory,
+            logging_prefix=args.logs, data_logging_enabled=False)
     return p
 
 
 def main():
     args, _ = ParserBase.parse_args([StandardPipelineParser, SoakArgs])
     # Svc::ComLogger frames each Fw::ComBuffer with no key and a U16 length
-    # prefix (Svc/ComLogger/ComLogger.cpp); override the GDS distributor defaults.
     config = ConfigManager()
     config.set_config("use_key", False)
     config.set_config("msg_len", U16Type)
