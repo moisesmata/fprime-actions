@@ -108,9 +108,11 @@ class _Handler(DataHandler):
 
 def process_logs(pipeline, com_logs: Path, results: Results):
     files = sorted(com_logs.glob("**/*.com"))
-    print(f"Processing {len(files)} ComLogger .com file(s) from {com_logs}")
     if not files:
+        # Deployments without Svc::ComLogger leave this dir empty 
+        print(f"No ComLogger .com files at {com_logs}; skipping log analysis.")
         return
+    print(f"Processing {len(files)} ComLogger .com file(s) from {com_logs}")
     pipeline.coders.register_event_consumer(_Handler(results.add_event))
     pipeline.coders.register_channel_consumer(_Handler(results.add_channel))
     for f in files:
