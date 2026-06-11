@@ -7,9 +7,6 @@ Type=simple
 User=__SERVICE_USER__
 WorkingDirectory=__INSTALL_DIR__
 ExecStart=__INSTALL_DIR__/bin/fsw -a 127.0.0.1 -p 50000
-# No restart on crash: a soak test exists to expose latent failures, so
-# a FATAL/segfault must remain observable for soak-test to detect and
-# disable the cron. soak-test's pre-flight catches the failed state.
 Restart=no
 StandardOutput=journal
 StandardError=journal

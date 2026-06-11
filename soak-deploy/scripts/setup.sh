@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Soak setup: stage the build artifacts into $HOME/fprime-soak and build the
+# Soak setup: copy the build artifacts into $HOME/fprime-soak and build the
 # soak virtualenv.
 #
 # Expected artifact layout (staged by the calling workflow into ./artifacts/):
@@ -14,22 +14,18 @@ set -euo pipefail
 INSTALL_DIR="${HOME}/fprime-soak"
 TEMPLATES="${ACTION_PATH}/templates"
 
+rm -rf "${INSTALL_DIR}" # delete anything that was there
 mkdir -p "${INSTALL_DIR}"/{bin,dict,gds-logs,ComLoggerFiles,test}
 
 cp artifacts/build-artifacts/*/*/dict/*TopologyDictionary.json "${INSTALL_DIR}/dict/"
 cp -r artifacts/int/. "${INSTALL_DIR}/test/"
-# Unlink first: if a previous deploy left FSW running, opening the live binary
-# for write returns ETXTBSY ("Text file busy"). rm unlinks the inode (the
-# running process keeps its anonymous copy) so cp creates a fresh file.
-rm -f "${INSTALL_DIR}/bin/fsw"
 cp artifacts/build-artifacts/*/*/bin/* "${INSTALL_DIR}/bin/fsw"
 chmod +x "${INSTALL_DIR}/bin/fsw"
 
 python3 -m venv --clear "${INSTALL_DIR}/venv"
-"${INSTALL_DIR}/venv/bin/pip" install -q -U pip wheel setuptools
-"${INSTALL_DIR}/venv/bin/pip" install -q -r artifacts/lib/fprime/requirements.txt
+"${INSTALL_DIR}/venv/bin/pip" install -r artifacts/lib/fprime/requirements.txt
 
-# fprime-gds reads command-line-options from fprime-gds.yml in WorkingDirectory.
+# render fprime-gds.yml
 sed -e "s#__INSTALL_DIR__#${INSTALL_DIR}#g" \
     "${TEMPLATES}/fprime-gds.yml" > "${INSTALL_DIR}/fprime-gds.yml"
 

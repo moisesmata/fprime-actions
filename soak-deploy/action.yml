@@ -1,8 +1,8 @@
 name: "F´ Soak Deploy"
-description: "Install a built F´ deployment as persistent flight-software and GDS soak services"
+description: "Install a built F´ deployment on a target platform in preparation for soak testing."
 inputs:
   platform:
-    description: "Service-manager platform (e.g. 'linux'). Selects scripts/deploy_<platform>.sh."
+    description: "Platform (e.g. 'linux'). Selects scripts/deploy_<platform>.sh."
     required: true
   gds-args:
     description: "Extra arguments appended to fprime-gds (e.g. '--framing-selection fprime-framing')."
