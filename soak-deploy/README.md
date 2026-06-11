@@ -1,15 +1,14 @@
 # nasa/fprime-actions/soak-deploy
 
 The `soak-deploy` action installs a previously-built F´ deployment onto a
-self-hosted runner as two **persistent** `systemd` services:
+self-hosted runner:
 
-* `fprime-soak-fsw` &mdash; the flight-software binary.
-* `fprime-soak-gds` &mdash; a headless `fprime-gds` client that stays
-  connected to the flight software for the entire soak.
+The install tree (`$HOME/fprime-soak`) is owned by the runner user. 
 
-The install tree (`$HOME/fprime-soak`) is owned by the runner user; the action
-only uses `sudo` for systemd operations (`systemctl`, `journalctl`, and writing
+Current support linux platforms by using systemd services. Uses `sudo` for systemd operations (`systemctl`, `journalctl`, and writing
 unit files into `/etc/systemd/system/`).
+
+More platforms will be added via adding more deploy scripts. 
 
 The systemd unit files and the GDS config are rendered from templates in
 [`templates/`](templates/) (`fsw.service`, `gds.service`, `fprime-gds.yml`)
@@ -34,7 +33,7 @@ The calling workflow is responsible for staging `int/` and `requirements.txt` be
 
 | Input      | Default   | Description                                                                                                              |
 |------------|-----------|--------------------------------------------------------------------------------------------------------------------------|
-| `platform` | `linux`   | Selects the platform-specific deploy script (`scripts/deploy_<platform>.sh`). Currently only `linux` ships.   |
+| `platform` | `linux`   | Selects the platform specific deploy script (`scripts/deploy_<platform>.sh`). Currently only `linux` |
 | `gds-args` | `""`      | Extra arguments appended to `fprime-gds` ExecStart (e.g. `--framing-selection fprime-framing`). |
 
 
@@ -48,6 +47,6 @@ The calling workflow is responsible for staging `int/` and `requirements.txt` be
 - uses: nasa/fprime-actions/soak-deploy@devel
 ```
 
-> Requires a self-hosted runner with `sudo` (for `systemctl` only) and `systemd`.
+> For Linux: Requires a self-hosted runner with `sudo` (for `systemctl` only) and `systemd`.
 > Meant to run once (setup); the periodic [`soak-monitor`](../soak-monitor/)
 > action runs on a schedule against the services it leaves running.

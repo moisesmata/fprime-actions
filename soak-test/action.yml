@@ -8,7 +8,5 @@ runs:
       env:
         ACTION_PATH: ${{ github.action_path }}
         # Used by gh CLI inside test.sh to disable the cron workflow on FATAL
-        # / dead FSW / pytest fail. The calling workflow must grant
-        # `permissions: actions: write` for this to succeed.
         GH_TOKEN: ${{ github.token }}
       run: ${{ github.action_path }}/scripts/test.sh
