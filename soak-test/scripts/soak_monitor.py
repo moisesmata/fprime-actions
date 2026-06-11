@@ -141,9 +141,15 @@ def make_pipeline(args, config) -> StandardPipeline:
     distributor.on_recv(), so disconnect() afterwards lets the process exit."""
     p = StandardPipeline()
     p.transport_implementation = args.connection_transport
-    p.setup(config=config, dictionaries=args.dictionaries,
-            file_store=args.files_storage_directory,
-            logging_prefix=args.logs, data_logging_enabled=False)
+    try:
+        p.setup(config=config, dictionaries=args.dictionaries,
+                file_store=args.files_storage_directory,
+                logging_prefix=args.logs, data_logging_enabled=False)
+    finally:
+        try:
+            p.disconnect()
+        except Exception:
+            pass
     return p
 
 
