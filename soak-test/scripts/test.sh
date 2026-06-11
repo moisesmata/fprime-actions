@@ -19,4 +19,6 @@ echo "[INFO] Analyzing soak telemetry"
 echo "[INFO] Running integration tests"
 cd "${INSTALL_DIR}/test"
 . "${INSTALL_DIR}/venv/bin/activate"
-pytest
+# Override pytest's default python_files=test_*.py so deployments that name
+# tests <something>_integration_tests.py (e.g. led-blinker) still get collected.
+pytest -o python_files='*.py'
