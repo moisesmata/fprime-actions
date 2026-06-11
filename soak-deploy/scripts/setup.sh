@@ -18,6 +18,10 @@ mkdir -p "${INSTALL_DIR}"/{bin,dict,gds-logs,ComLoggerFiles,test}
 
 cp artifacts/build-artifacts/*/*/dict/*TopologyDictionary.json "${INSTALL_DIR}/dict/"
 cp -r artifacts/int/. "${INSTALL_DIR}/test/"
+# Unlink first: if a previous deploy left FSW running, opening the live binary
+# for write returns ETXTBSY ("Text file busy"). rm unlinks the inode (the
+# running process keeps its anonymous copy) so cp creates a fresh file.
+rm -f "${INSTALL_DIR}/bin/fsw"
 cp artifacts/build-artifacts/*/*/bin/* "${INSTALL_DIR}/bin/fsw"
 chmod +x "${INSTALL_DIR}/bin/fsw"
 
