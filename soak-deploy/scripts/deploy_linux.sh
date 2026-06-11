@@ -33,6 +33,13 @@ for i in $(seq 1 90); do
     echo "[INFO] FSW listening on 50000 (after ${i}s)"
     break
   fi
+  # Restart=no on the unit means a crash leaves the service in 'failed';
+  # don't keep polling for a port that will never appear.
+  if ! sudo systemctl is-active --quiet fprime-soak-fsw; then
+    echo "::error::FSW exited during startup"
+    sudo journalctl -u fprime-soak-fsw --no-pager -n 60 || true
+    exit 1
+  fi
   if [ "$i" -eq 90 ]; then
     echo "::error::FSW never bound port 50000 within 90s"
     sudo journalctl -u fprime-soak-fsw --no-pager -n 60 || true
