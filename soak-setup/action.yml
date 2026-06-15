@@ -8,17 +8,22 @@ inputs:
     description: "Extra arguments appended to fprime-gds (e.g. '--framing-selection fprime-framing')."
     required: false
     default: ""
+  fsw-args:
+    description: "Arguments passed to the FSW binary (e.g. '-a 127.0.0.1 -p 50000')."
+    required: false
+    default: "-a 127.0.0.1 -p 50000"
 runs:
   using: "composite"
   steps:
-    - name: "Soak setup"
+    - name: "Soak Setup"
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
+        GDS_ARGS: ${{ inputs.gds-args }}
       run: ${{ github.action_path }}/scripts/setup.sh
     - name: "Soak deploy (${{ inputs.platform }})"
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
-        GDS_ARGS: ${{ inputs.gds-args }}
+        FSW_ARGS: ${{ inputs.fsw-args }}
       run: ${{ github.action_path }}/scripts/deploy_${{ inputs.platform }}.sh

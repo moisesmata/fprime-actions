@@ -109,12 +109,24 @@ class _Handler(DataHandler):
 
 
 def process_logs(pipeline, com_logs: Path, results: Results):
-    files = sorted(com_logs.glob("**/*.com"))
+    # Collect all .com files from both the specified directory and GDS logs
+    search_paths = [com_logs]
+
+    # Check for GDS ComLogger files in the standard GDS location
+    gds_com_logs = com_logs.parent / "ComLoggerFiles"
+    if gds_com_logs.exists() and gds_com_logs.is_dir():
+        search_paths.append(gds_com_logs)
+
+    files = []
+    for path in search_paths:
+        files.extend(sorted(path.glob("**/*.com")))
+
     if not files:
-        # Deployments without Svc::ComLogger leave this dir empty 
-        print(f"No ComLogger .com files at {com_logs}; skipping log analysis.")
+        # Deployments without Svc::ComLogger leave this dir empty
+        print(f"No ComLogger .com files found in {search_paths}; skipping log analysis.")
         return
-    print(f"Processing {len(files)} ComLogger .com file(s) from {com_logs}")
+
+    print(f"Processing {len(files)} ComLogger .com file(s) from {len(search_paths)} location(s)")
     pipeline.coders.register_event_consumer(_Handler(results.add_event))
     pipeline.coders.register_channel_consumer(_Handler(results.add_channel))
     for f in files:
