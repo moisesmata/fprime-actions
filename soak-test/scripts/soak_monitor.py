@@ -165,7 +165,8 @@ def main():
     process_logs(pipeline, args.com_logs, results)
     results.analyze_trends()
 
-    print(f"\nEvents Decoded:           {results.events}")
+    print("")
+    print(f"Events Decoded:           {results.events}")
     print(f"Channel Samples Decoded:  {results.channels}")
     print(f"Numeric Channels Tracked: {len(results.values)}")
     print(f"Alerts:                   {len(results.alerts)}")
