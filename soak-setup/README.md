@@ -33,7 +33,7 @@ The calling workflow is responsible for staging `int/` and `requirements.txt` be
 
 | Input      | Default   | Description                                                                                                              |
 |------------|-----------|--------------------------------------------------------------------------------------------------------------------------|
-| `platform` | `linux`   | Selects the platform specific deploy script (`scripts/deploy_<platform>.sh`). Currently only `linux` |
+| `platform` | *(required)* | Selects the platform specific deploy script (`scripts/deploy_<platform>.sh`). Currently only `linux` |
 | `gds-args` | `""`      | Extra arguments appended to `fprime-gds` ExecStart (e.g. `--framing-selection fprime-framing`). |
 
 
