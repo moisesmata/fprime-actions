@@ -7,8 +7,7 @@ Wants=fprime-soak-fsw.service
 Type=simple
 User=__SERVICE_USER__
 WorkingDirectory=__INSTALL_DIR__
-# fprime-gds reads command-line options from fprime-gds.yml in WorkingDirectory, but we expose additional through GDS_ARGS
-ExecStart=__INSTALL_DIR__/venv/bin/fprime-gds __GDS_ARGS__
+ExecStart=__INSTALL_DIR__/venv/bin/fprime-gds --no-app --gui none --logs __INSTALL_DIR__/gds-logs --dictionary __DICT_PATH__ __GDS_ARGS__
 Restart=no
 StandardOutput=journal
 StandardError=journal

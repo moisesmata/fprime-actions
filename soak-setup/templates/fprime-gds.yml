@@ -1,7 +1,0 @@
-command-line-options:
-  ip-client: null       # enables ip-client
-  no-app: null          # starts GDS with no app. 
-  ip-address: 127.0.0.1
-  gui: none
-  deployment: __INSTALL_DIR__
-  logs: __INSTALL_DIR__/gds-logs

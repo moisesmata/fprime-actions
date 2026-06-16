@@ -6,8 +6,8 @@
 # Expected artifact layout (staged by the calling workflow into ./artifacts/):
 #   artifacts/build-artifacts/<arch>/<deployment>/bin/<binary>
 #   artifacts/build-artifacts/<arch>/<deployment>/dict/*TopologyDictionary.json
-#   artifacts/lib/fprime/requirements.txt
-#   artifacts/int/                
+#   artifacts/int/
+#   artifacts/fprime-gds.yml      
 
 set -euo pipefail
 
@@ -17,23 +17,24 @@ TEMPLATES="${ACTION_PATH}/templates"
 render() {
   sed -e "s#__INSTALL_DIR__#${INSTALL_DIR}#g" \
       -e "s#__SERVICE_USER__#$(whoami)#g" \
-      -e "s#__GDS_ARGS__#${GDS_ARGS}#g" "$1"
+      -e "s#__GDS_ARGS__#${GDS_ARGS}#g" \
+      -e "s#__DICT_PATH__#${DICT_PATH}#g" "$1"
 }
 
-rm -rf "${INSTALL_DIR}" # delete anything that was there
+# delete anything that was there
+rm -rf "${INSTALL_DIR}" 
 mkdir -p "${INSTALL_DIR}"/{bin,dict,gds-logs,ComLoggerFiles,test}
 
 cp artifacts/build-artifacts/*/*/dict/*TopologyDictionary.json "${INSTALL_DIR}/dict/"
+cp artifacts/fprime-gds.yml "${INSTALL_DIR}/fprime-gds.yml"
 cp -r artifacts/int/. "${INSTALL_DIR}/test/"
 cp artifacts/build-artifacts/*/*/bin/* "${INSTALL_DIR}/bin/fsw"
 chmod +x "${INSTALL_DIR}/bin/fsw"
 
-python3 -m venv "${INSTALL_DIR}/venv"
-"${INSTALL_DIR}/venv/bin/pip" install fprime-gds 
+DICT_PATH=$(ls "${INSTALL_DIR}/dict/"*TopologyDictionary.json | head -n 1)
 
-# render fprime-gds.yml
-sed -e "s#__INSTALL_DIR__#${INSTALL_DIR}#g" \
-    "${TEMPLATES}/fprime-gds.yml" > "${INSTALL_DIR}/fprime-gds.yml"
+python3 -m venv "${INSTALL_DIR}/venv"
+"${INSTALL_DIR}/venv/bin/pip" install fprime-gds
 
 echo "[INFO] Soak Setup Complete: ${INSTALL_DIR}"
 
