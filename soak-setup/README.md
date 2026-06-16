@@ -48,5 +48,5 @@ The calling workflow is responsible for staging `int/` and `requirements.txt` be
 ```
 
 > For Linux: Requires a self-hosted runner with `sudo` (for `systemctl` only) and `systemd`.
-> Meant to run once (setup); the periodic [`soak-monitor`](../soak-monitor/)
+> Meant to run once (setup); the periodic [`soak-test`](../soak-test/)
 > action runs on a schedule against the services it leaves running.
