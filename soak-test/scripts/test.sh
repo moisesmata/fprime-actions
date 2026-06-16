@@ -5,7 +5,7 @@
 set -uo pipefail
 
 INSTALL_DIR="${HOME}/fprime-soak"
-DICT=$(ls "${INSTALL_DIR}"/dict/*TopologyDictionary.json | head -n1)
+DICT=$(ls "${INSTALL_DIR}"/dict/*TopologyDictionary.json)
 
 # Analyze accumulated telemetry. soak_monitor exits non-zero on FATAL.
 echo "[INFO] Analyzing soak telemetry"
