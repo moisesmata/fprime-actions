@@ -27,8 +27,7 @@ artifacts/fprime-gds.yml
 ```
 
 The calling workflow is responsible for staging `int/` (integration tests) and
-`fprime-gds.yml` (the deployment's own config — same one used to drive the
-integration-test GDS) before upload. Soak-specific GDS flags (`--no-app`,
+`fprime-gds.yml` (the deployment's own GDS config) before upload. Soak-specific GDS flags (`--no-app`,
 `--gui none`, `--logs`, `--dictionary`) are appended on the systemd ExecStart
 line, so the yml stays owned by the deployment.
 

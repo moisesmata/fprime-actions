@@ -21,7 +21,7 @@ render() {
       -e "s#__DICT_PATH__#${DICT_PATH}#g" "$1"
 }
 
-# delete anything that was there
+# Delete anything that was there
 rm -rf "${INSTALL_DIR}" 
 mkdir -p "${INSTALL_DIR}"/{bin,dict,gds-logs,ComLoggerFiles,test}
 
