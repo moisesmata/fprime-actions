@@ -7,7 +7,7 @@
 #   artifacts/build-artifacts/<arch>/<deployment>/bin/<binary>
 #   artifacts/build-artifacts/<arch>/<deployment>/dict/*TopologyDictionary.json
 #   artifacts/int/
-#   artifacts/fprime-gds.yml      
+#   artifacts/fprime-gds.yml        
 
 set -euo pipefail
 

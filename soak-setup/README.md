@@ -10,8 +10,9 @@ unit files into `/etc/systemd/system/`).
 
 More platforms will be added via adding more deploy scripts. 
 
-The systemd unit files and the GDS config are rendered from templates in
-[`templates/`](templates/) (`fsw.service`, `gds.service`, `fprime-gds.yml`)
+The systemd unit files are rendered from templates in
+[`templates/`](templates/) (`fsw.service.template`, `gds.service.template`).
+The GDS config is supplied by the deployment as `fprime-gds.yml` (see below).
 
 ## Artifact contract
 
@@ -21,13 +22,15 @@ into `./artifacts/`. The action looks for:
 ```
 artifacts/build-artifacts/<arch>/<deployment>/bin/<binary>
 artifacts/build-artifacts/<arch>/<deployment>/dict/*TopologyDictionary.json
-artifacts/lib/fprime/requirements.txt
-artifacts/int/                                
+artifacts/int/
+artifacts/fprime-gds.yml
 ```
 
-The `build-artifacts` and `lib/fprime/requirements.txt` paths are produced by
-existing actions (`build-with-aarch64-toolchain`, `external-repository-setup`).
-The calling workflow is responsible for staging `int/` and `requirements.txt` before upload.
+The calling workflow is responsible for staging `int/` (integration tests) and
+`fprime-gds.yml` (the deployment's own config — same one used to drive the
+integration-test GDS) before upload. Soak-specific GDS flags (`--no-app`,
+`--gui none`, `--logs`, `--dictionary`) are appended on the systemd ExecStart
+line, so the yml stays owned by the deployment.
 
 ## Inputs
 

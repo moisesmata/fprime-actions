@@ -11,7 +11,6 @@ DICT=$(ls "${INSTALL_DIR}"/dict/*TopologyDictionary.json)
 echo "[INFO] Analyzing soak telemetry"
 "${INSTALL_DIR}/venv/bin/python" "${ACTION_PATH}/scripts/soak_monitor.py" \
   --dictionary "${DICT}" \
-  --logs "$(mktemp -d)" \
   --gds-logs "${INSTALL_DIR}/gds-logs" \
   --com-logs "${INSTALL_DIR}/ComLoggerFiles"
 monitor_rc=$?
