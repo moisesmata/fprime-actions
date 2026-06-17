@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
-"""F´ Soak Test Monitor: decode ComLogger .com files, alert on FATAL events,
-resource thresholds, and degradation trends. Exit 1 on any FATAL."""
+"""F´ Soak Test Monitor.
+
+Uses gdslog/comlog_parser.py to parse logs, stores events and 
+telemetry in a results object, and analyzes trends to identify potential issues
+"""
 
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from fprime_gds.common.handlers import DataHandler
-from fprime_gds.common.models.serialize.numerical_types import U16Type
-from fprime_gds.common.pipeline.standard import StandardPipeline
-from fprime_gds.common.utils.config_manager import ConfigManager
 from fprime_gds.executables.cli import ParserBase, StandardPipelineParser
+
+from comlog_parser import process_com_logs
+from gdslog_parser import process_gds_logs
 
 MIN_POINTS_FOR_TREND = 5         # need a few samples before a trend is meaningful
 LEAK_GROWTH_PERCENT = 10.0       # resource grew by this much across the window -> alert
 DEPLETION_DROP_PERCENT = 50.0    # free resource dropped by this much -> alert
 HIGH_CPU_PERCENT = 90.0
-
 
 def _classify(name: str) -> str:
     """Classify F' channel name (case-insensitive) for trend/threshold rules."""
@@ -29,15 +30,16 @@ def _classify(name: str) -> str:
     if "queuedepth" in n: return "queue_depth"
     return "other"
 
-
 def _to_float(val):
     if isinstance(val, bool): return None
     if isinstance(val, (int, float)): return float(val)
     try: return float(str(val).replace(",", ""))
     except (TypeError, ValueError): return None
 
-
 class Results:
+    """Accumulates decoded events/channels from both parsers, applies
+    threshold rules at ingest time, and runs trend analysis at the end."""
+
     def __init__(self):
         self.values: Dict[str, List[float]] = {}        # channel -> samples
         self.last_ts: Dict[str, str] = {}               # channel -> last timestamp
@@ -49,17 +51,14 @@ class Results:
     def alert(self, severity: str, msg: str, ts: str = ""):
         self.alerts.append((severity, msg, ts))
 
+    # ---- ingest from comlog_parser (decoded GDS objects) ----
+
     def add_event(self, ev):
         self.events += 1
         sev = str(ev.template.severity)
         ts = str(getattr(ev, "time", ""))
         body = f"{ev.template.name}: {getattr(ev, 'args', '')}"
-        if sev == "EventSeverity.FATAL":
-            self.alert("FATAL", body, ts)
-        elif sev == "EventSeverity.WARNING_HI":
-            self.alert("WARNING_HI", body, ts)
-        elif sev == "EventSeverity.WARNING_LO":
-            self.alert("WARNING_LO", body, ts)
+        self._record_event(sev, body, ts)
 
     def add_channel(self, ch):
         self.channels += 1
@@ -68,6 +67,29 @@ class Results:
             return
         name = ch.template.name
         ts = str(getattr(ch, "time", ""))
+        self._record_channel(name, value, ts)
+
+    # ---- ingest from gdslog_parser (already-stringified CSV rows) ----
+
+    def add_text_event(self, name: str, severity: str, body: str, ts: str = ""):
+        self.events += 1
+        self._record_event(severity, f"{name}: {body}", ts)
+
+    def add_text_channel(self, name: str, value: float, ts: str = ""):
+        self.channels += 1
+        self._record_channel(name, value, ts)
+
+    # ---- shared internals ----
+
+    def _record_event(self, sev: str, body: str, ts: str):
+        if sev == "EventSeverity.FATAL":
+            self.alert("FATAL", body, ts)
+        elif sev == "EventSeverity.WARNING_HI":
+            self.alert("WARNING_HI", body, ts)
+        elif sev == "EventSeverity.WARNING_LO":
+            self.alert("WARNING_LO", body, ts)
+
+    def _record_channel(self, name: str, value: float, ts: str):
         self.values.setdefault(name, []).append(value)
         self.last_ts[name] = ts
         kind = _classify(name)
@@ -98,83 +120,34 @@ class Results:
                 self.alert("WARNING_HI", f"Rising queue depth: {base}", ts)
 
 
-class _Handler(DataHandler):
-    """Adapter that routes the GDS DataHandler callback to a plain function.
-    Wraps each call in try/except so a malformed record never aborts the run."""
-    def __init__(self, fn):
-        self.fn = fn
-    def data_callback(self, data, sender=None):
-        try: self.fn(data)
-        except Exception: pass
-
-
-def process_logs(pipeline, com_logs: Path, results: Results):
-    # Collect all .com files from both the specified directory and GDS logs
-    search_paths = [com_logs]
-
-    # Check for GDS ComLogger files in the standard GDS location
-    gds_com_logs = com_logs.parent / "ComLoggerFiles"
-    if gds_com_logs.exists() and gds_com_logs.is_dir():
-        search_paths.append(gds_com_logs)
-
-    files = []
-    for path in search_paths:
-        files.extend(sorted(path.glob("**/*.com")))
-
-    if not files:
-        # Deployments without Svc::ComLogger leave this dir empty
-        print(f"No ComLogger .com files found in {search_paths}; skipping log analysis.")
-        return
-
-    print(f"Processing {len(files)} ComLogger .com file(s) from {len(search_paths)} location(s)")
-    pipeline.coders.register_event_consumer(_Handler(results.add_event))
-    pipeline.coders.register_channel_consumer(_Handler(results.add_channel))
-    for f in files:
-        try:
-            data = f.read_bytes()
-            if data:
-                pipeline.distributor.on_recv(data)
-        except Exception as exc:
-            print(f"Error processing {f}: {exc}")
-
-
 class SoakArgs(ParserBase):
     DESCRIPTION = "F´ Soak Test Monitor"
     def get_arguments(self):
-        return {("--com-logs",): {"type": Path, "required": True,
-                "help": "Directory of Svc::ComLogger .com files (may be empty)."}}
+        return {
+            ("--com-logs",): {"type": Path, "required": False, "default": None,
+                "help": "Directory of Svc::ComLogger .com files (may be empty)."},
+            ("--gds-logs",): {"type": Path, "required": False, "default": None,
+                "help": "Directory of GDS session logs containing channel.log/event.log "
+                        "(e.g. <deployment>/logs). Preferred when both sources are given."},
+        }
     def handle_arguments(self, args, **_):
+        if args.com_logs is None and args.gds_logs is None:
+            raise SystemExit("error: at least one of --com-logs or --gds-logs is required")
         return args
-
-
-def make_pipeline(args, config) -> StandardPipeline:
-    """Stand up a StandardPipeline configured to decode ComLogger records.
-    setup() launches transport/file-uplink threads; we feed data manually via
-    distributor.on_recv(), so disconnect() afterwards lets the process exit."""
-    p = StandardPipeline()
-    p.transport_implementation = args.connection_transport
-    try:
-        p.setup(config=config, dictionaries=args.dictionaries,
-                file_store=args.files_storage_directory,
-                logging_prefix=args.logs, data_logging_enabled=False)
-    finally:
-        try:
-            p.disconnect()
-        except Exception:
-            pass
-    return p
 
 
 def main():
     args, _ = ParserBase.parse_args([StandardPipelineParser, SoakArgs])
-    # Svc::ComLogger frames each Fw::ComBuffer with no key and a U16 length
-    config = ConfigManager()
-    config.set_config("use_key", False)
-    config.set_config("msg_len", U16Type)
-    pipeline = make_pipeline(args, config)
 
     results = Results()
-    process_logs(pipeline, args.com_logs, results)
+    # Prefer GDS text logs when both sources are provided; fall back to
+    # decoding Svc::ComLogger .com files only if the GDS run produced nothing.
+    gds_rows = process_gds_logs(args.gds_logs, results)
+    if gds_rows == 0 and args.com_logs is not None:
+        process_com_logs(args, args.com_logs, results)
+    elif gds_rows > 0 and args.com_logs is not None:
+        print("GDS logs supplied analysis; skipping ComLogger decode.")
+
     results.analyze_trends()
 
     print("")
