@@ -33,7 +33,7 @@ The calling workflow is responsible for staging `int/` and `requirements.txt` be
 
 | Input      | Default   | Description                                                                                                              |
 |------------|-----------|--------------------------------------------------------------------------------------------------------------------------|
-| `platform` | `linux`   | Selects the platform specific deploy script (`scripts/deploy_<platform>.sh`). Currently only `linux` |
+| `platform` | *(required)* | Selects the platform specific deploy script (`scripts/deploy_<platform>.sh`). Currently only `linux` |
 | `gds-args` | `""`      | Extra arguments appended to `fprime-gds` ExecStart (e.g. `--framing-selection fprime-framing`). |
 
 
@@ -48,5 +48,5 @@ The calling workflow is responsible for staging `int/` and `requirements.txt` be
 ```
 
 > For Linux: Requires a self-hosted runner with `sudo` (for `systemctl` only) and `systemd`.
-> Meant to run once (setup); the periodic [`soak-monitor`](../soak-monitor/)
+> Meant to run once (setup); the periodic [`soak-test`](../soak-test/)
 > action runs on a schedule against the services it leaves running.

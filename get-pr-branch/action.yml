@@ -22,11 +22,16 @@ runs:
         DEFAULT_TARGET_REF: ${{ inputs.default_target_ref }}
         EVENT_NAME: ${{ github.event_name }}
         PR_NUMBER: ${{ github.event.number }}
+        GH_TOKEN: ${{ github.token }}
       run: |
         BRANCH_NAME="${GITHUB_REF#refs/heads/}"
         echo "Looking for 'pr-${PR_NUMBER}'/'${BRANCH_NAME}'"
-        response_code_pr=`curl -w '%{response_code}' https://api.github.com/repos/${TARGET_REPOSITORY}/branches/pr-${PR_NUMBER} -o /dev/null`
-        response_code_branch=`curl -w '%{response_code}' https://api.github.com/repos/${TARGET_REPOSITORY}/branches/${BRANCH_NAME} -o /dev/null`
+        AUTH_HEADER=()
+        if [[ -n "${GH_TOKEN}" ]]; then
+          AUTH_HEADER=(-H "Authorization: Bearer ${GH_TOKEN}")
+        fi
+        response_code_pr=`curl "${AUTH_HEADER[@]}" -w '%{response_code}' https://api.github.com/repos/${TARGET_REPOSITORY}/branches/pr-${PR_NUMBER} -o /dev/null`
+        response_code_branch=`curl "${AUTH_HEADER[@]}" -w '%{response_code}' https://api.github.com/repos/${TARGET_REPOSITORY}/branches/${BRANCH_NAME} -o /dev/null`
         if [[ "${EVENT_NAME}" == "pull_request" && "$response_code_pr" == "200" ]]; then
           echo "TARGET_BRANCH=pr-${PR_NUMBER}" >> $GITHUB_OUTPUT
           echo "PR branch found, using pr-${PR_NUMBER}"

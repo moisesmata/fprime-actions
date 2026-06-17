@@ -26,4 +26,5 @@ runs:
       env:
         ACTION_PATH: ${{ github.action_path }}
         FSW_ARGS: ${{ inputs.fsw-args }}
+        GDS_ARGS: ${{ inputs.gds-args }}
       run: ${{ github.action_path }}/scripts/deploy_${{ inputs.platform }}.sh
