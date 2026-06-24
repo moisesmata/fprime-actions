@@ -12,7 +12,8 @@ echo "[INFO] Analyzing soak telemetry"
 "${INSTALL_DIR}/venv/bin/python" "${ACTION_PATH}/scripts/soak_monitor.py" \
   --dictionary "${DICT}" \
   --gds-logs "${INSTALL_DIR}/gds-logs" \
-  --com-logs "${INSTALL_DIR}/ComLoggerFiles"
+  --com-logs "${INSTALL_DIR}/ComLoggerFiles" \
+  --failure-log "${INSTALL_DIR}/failure-history.log"
 monitor_rc=$?
 
 # Run the deployment's integration tests.

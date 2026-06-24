@@ -22,8 +22,15 @@ render() {
 }
 
 # Delete anything that was there
-rm -rf "${INSTALL_DIR}" 
+rm -rf "${INSTALL_DIR}"
 mkdir -p "${INSTALL_DIR}"/{bin,dict,gds-logs,ComLoggerFiles,test}
+
+# Cross-run failure log: header line records the soak start time so
+# soak_monitor.py can render "X weeks, Y days, ... since soak start"
+# alongside each alert. soak_monitor.py appends below this line on every
+# run. Re-running setup rewrites the header, which is the documented way
+# to "start over" after a fresh deploy.
+echo "# SOAK STARTED $(date +%Y-%m-%dT%H:%M:%S)" > "${INSTALL_DIR}/failure-history.log"
 
 cp artifacts/build-artifacts/*/*/dict/*TopologyDictionary.json "${INSTALL_DIR}/dict/"
 cp artifacts/fprime-gds.yml "${INSTALL_DIR}/fprime-gds.yml"
