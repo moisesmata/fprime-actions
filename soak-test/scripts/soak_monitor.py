@@ -16,7 +16,8 @@ Svc/BufferManager/Telemetry.fppi):
   BufferManager (one set per managed pool, e.g. ComCcsds.commsBufferManager.*):
     TotalBuffs (U32) - total buffers configured (constant); not analyzed.
     CurrBuffs  (U32) - currently allocated; trended (rising = leak).
-    HiBuffs    (U32) - high-water mark of CurrBuffs; trended (rising = leak).
+    HiBuffs    (U32) - high-water mark; not analyzed - CurrBuffs already
+                      surfaces the same signal and HiBuffs only ratchets up.
     NoBuffs    (U32) - allocation failures (cumulative); >0 alerts.
     EmptyBuffs (U32) - null/zero-size returns (cumulative); >0 alerts.
 
@@ -66,7 +67,6 @@ TREND_RULES = {
     "MEMORY_USED":       ("up",   LEAK_GROWTH_PERCENT,    "Possible memory leak"),
     "NON_VOLATILE_FREE": ("down", DEPLETION_DROP_PERCENT, "Possible storage depletion"),
     "CurrBuffs":         ("up",   LEAK_GROWTH_PERCENT,    "Possible buffer leak"),
-    "HiBuffs":           ("up",   LEAK_GROWTH_PERCENT,    "Possible buffer leak"),
 }
 
 # FSW-emitted event severities (kept verbatim from the FSW dictionary).
@@ -268,19 +268,18 @@ class Results:
                 (direction == "up" and percent_change >= threshold) or
                 (direction == "down" and percent_change <= -threshold)
             )
-            label = prefix if breached else "nominal"
-            self.trends.append(f"{channel_name}: {label} — {summary_data}")
-
             if breached:
                 # Stable key (trend, channel, prefix). Once flagged, the
-                # same condition won't re-fail the build; the trend line
-                # is still printed so the values stay visible.
+                # same condition won't re-fail the build; the alert line
+                # carries the full data so the values stay visible.
                 self.alerts.append(Alert(
                     TELEMETRY_WARNING,
                     f"{prefix}: {channel_name}: {summary_data}",
                     last_timestamp,
                     ("trend", channel_name, prefix),
                 ))
+            else:
+                self.trends.append(f"{channel_name}: nominal — {summary_data}")
 
 
 def _print_summary(results: Results, suppressed: int,
@@ -295,19 +294,19 @@ def _print_summary(results: Results, suppressed: int,
     if suppressed:
         print(f"Alerts (already logged):  {suppressed}")
 
-    if results.alerts:
+    if results.trends or results.alerts:
         print("")
-        print("ALERTS:")
-        for alert in results.alerts:
-            ts = f" [{alert.timestamp}]" if alert.timestamp else ""
-            elapsed = _format_elapsed(alert.timestamp, soak_start)
-            print(f" {alert.severity} - {alert.message}{ts}{elapsed}")
-
-    if results.trends:
-        print("")
-        print("TREND ANALYSIS:")
-        for trend in results.trends:
-            print(f" {trend}")
+        print("Telemetry Analysis:")
+        if results.trends:
+            print(" Nominal:")
+            for trend in results.trends:
+                print(f"  {trend}")
+        if results.alerts:
+            print(" Alerts:")
+            for alert in results.alerts:
+                ts = f" [{alert.timestamp}]" if alert.timestamp else ""
+                elapsed = _format_elapsed(alert.timestamp, soak_start)
+                print(f"  {alert.severity} - {alert.message}{ts}{elapsed}")
 
 
 # Header written by soak-setup; matches `# SOAK STARTED <ISO8601-no-tz>`.
