@@ -12,7 +12,7 @@ Svc/BufferManager/Telemetry.fppi):
     NON_VOLATILE_FREE (U64 KB) - free disk on /; trended for depletion.
     NON_VOLATILE_TOTAL(U64 KB) - total disk (constant); not analyzed.
     CPU               (F32 %)  - average load across all cores; threshold 95%.
-    CPU_NN            (F32 %)  - per-core load; same 95% threshold.
+    CPU_NN            (F32 %)  - per-core load; collected but not alerted on.
   BufferManager (one set per managed pool, e.g. ComCcsds.commsBufferManager.*):
     TotalBuffs (U32) - total buffers configured (constant); not analyzed.
     CurrBuffs  (U32) - currently allocated; trended (rising = leak).
@@ -55,7 +55,7 @@ MIN_POINTS_FOR_TREND = 10        # need a few samples before a trend is meaningf
 LEAK_GROWTH_PERCENT = 10.0       # resource grew by this much across the window -> alert
 DEPLETION_DROP_PERCENT = 50.0    # free resource dropped by this much -> alert
 MIN_TREND_R_SQUARED = 0.5        # below this the slope is noise, not a trend
-HIGH_CPU_PERCENT = 95.0          # hard ceiling on CPU and CPU_NN samples (per FPP, F32 percent)
+HIGH_CPU_PERCENT = 95.0          # hard ceiling on the average CPU channel (per-core CPU_NN are not alerted)
 
 # Channels that get trend regression + a printed trend line + a possible
 # alert. Format: suffix -> (direction, threshold_percent, alert_prefix).
@@ -189,9 +189,10 @@ class Results:
         for channel_name, samples in self.channels.items():
             suffix = channel_name.rsplit(".", 1)[-1]
             # SystemResources exposes CPU (average) and CPU_00, CPU_01, ...
-            # per-core. We alert on both at the same threshold but only print
-            # a trend line for channels in TREND_RULES (not per-core CPU).
-            is_cpu = suffix == "CPU" or suffix.startswith("CPU_")
+            # per-core. Only the average is threshold-checked - per-core
+            # spikes are common during normal scheduling and would
+            # generate alerts for transient single-core pinning.
+            is_avg_cpu = suffix == "CPU"
             values = [value for value, _ in samples]
 
             # Per-sample threshold checks — coalesce to ONE alert per
@@ -202,10 +203,10 @@ class Results:
             kind: Tuple[str, ...] = ()
             summary_prefix = ""
             value_fmt = lambda v: f"{v:g}"
-            if is_cpu:
+            if is_avg_cpu:
                 offending = [(v, t) for v, t in samples if v > HIGH_CPU_PERCENT]
                 kind = ("threshold", channel_name, "high-cpu")
-                summary_prefix = "High CPU usage"
+                summary_prefix = "High average CPU usage"
                 value_fmt = lambda v: f"{v:g}%"
             elif suffix == "NoBuffs":
                 offending = [(v, t) for v, t in samples if v > 0]
@@ -226,12 +227,28 @@ class Results:
                 )
                 self.alerts.append(Alert(TELEMETRY_WARNING, msg, first_ts, kind))
 
-            # Trend analysis only for channels with a configured rule.
-            if suffix not in TREND_RULES or len(values) < MIN_POINTS_FOR_TREND:
+            # Trend analysis: every channel whose suffix is in TREND_RULES
+            # gets a line in the trend section, regardless of sample count
+            # or breach status. Nominal channels print "<channel>: nominal
+            # — <data>"; breached channels print the alert prefix instead
+            # and also append to alerts.
+            if suffix not in TREND_RULES:
+                continue
+
+            direction, threshold, prefix = TREND_RULES[suffix]
+            n = len(values)
+
+            if n < MIN_POINTS_FOR_TREND:
+                # Not enough history yet to fit a line; report current
+                # value and how close we are to having a fit.
+                self.trends.append(
+                    f"{channel_name}: nominal — "
+                    f"{_format_value(suffix, values[-1])} now, "
+                    f"{n}/{MIN_POINTS_FOR_TREND} samples for fit"
+                )
                 continue
 
             slope, intercept, r_squared, sigma = _linear_regression(values)
-            n = len(values)
             fitted_first = intercept
             fitted_last = intercept + slope * (n - 1)
             # Use fitted endpoints, not raw first/last, so a single noisy sample
@@ -240,26 +257,27 @@ class Results:
             percent_change = (fitted_last - fitted_first) / denominator * 100.0
             last_timestamp = samples[-1][1]
 
-            summary = (
-                f"{channel_name}: "
+            summary_data = (
                 f"{_format_value(suffix, values[0])} -> {_format_value(suffix, values[-1])} "
                 f"(fit: {percent_change:+.1f}% over {n} samples, "
                 f"slope={_format_slope(suffix, slope)}, "
                 f"R²={r_squared:.2f}, σ={_format_sigma(suffix, sigma)})"
             )
-            self.trends.append(summary)
 
-            if r_squared < MIN_TREND_R_SQUARED:
-                continue
-            direction, threshold, prefix = TREND_RULES[suffix]
-            if (direction == "up" and percent_change >= threshold) or \
-               (direction == "down" and percent_change <= -threshold):
+            breached = r_squared >= MIN_TREND_R_SQUARED and (
+                (direction == "up" and percent_change >= threshold) or
+                (direction == "down" and percent_change <= -threshold)
+            )
+            label = prefix if breached else "nominal"
+            self.trends.append(f"{channel_name}: {label} — {summary_data}")
+
+            if breached:
                 # Stable key (trend, channel, prefix). Once flagged, the
                 # same condition won't re-fail the build; the trend line
                 # is still printed so the values stay visible.
                 self.alerts.append(Alert(
                     TELEMETRY_WARNING,
-                    f"{prefix}: {summary}",
+                    f"{prefix}: {channel_name}: {summary_data}",
                     last_timestamp,
                     ("trend", channel_name, prefix),
                 ))
@@ -273,7 +291,6 @@ def _print_summary(results: Results, suppressed: int,
         print(f"Soak Started:             {soak_start.isoformat()}")
     print(f"Events Decoded:           {len(results.events)}")
     print(f"Channel Samples Decoded:  {total_samples}")
-    print(f"Numeric Channels Tracked: {len(results.channels)}")
     print(f"Alerts (new):             {len(results.alerts)}")
     if suppressed:
         print(f"Alerts (already logged):  {suppressed}")
