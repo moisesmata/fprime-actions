@@ -13,7 +13,7 @@ echo "[INFO] Analyzing soak telemetry"
   --dictionary "${DICT}" \
   --gds-logs "${INSTALL_DIR}/gds-logs" \
   --com-logs "${INSTALL_DIR}/ComLoggerFiles" \
-  --failure-log "${INSTALL_DIR}/failure-history.log"
+  --soak-database "${INSTALL_DIR}/soak-database.log"
 monitor_rc=$?
 
 # Run the deployment's integration tests.
