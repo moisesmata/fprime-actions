@@ -30,8 +30,9 @@ soak-database.log row formats (tab-separated, append-only):
   T\t<iso>\t<channel>\t<value>              raw trend-channel sample
 
 Trend analysis reuses T rows; threshold and event alerts use the fresh
-GDS logs only (so a breach reports once per breaching sample, not once
-per breaching sample times number of cron ticks).
+GDS logs only. Threshold breaches are coalesced to ONE alert per channel
+per run (with the extreme value + timestamp), so the printed Alerts
+list mirrors the printed Threshold checks list one-to-one.
 
 Restart protection: if the database contains any E row at FATAL
 severity, trend analysis ignores all T rows (and current-window trend
@@ -146,7 +147,11 @@ class Results:
         self.channels: Dict[str, List[Tuple[float, str]]] = {}      # name -> [(value, ts)]
         self.events: List[Tuple[str, str, str, str]] = []           # [(severity, name, body, ts)]
         self.alerts: List[Tuple[str, str, str]] = []                # [(severity, msg, ts)]
-        self.trends: List[str] = []                                 # nominal trend summary lines
+        # Structured trend rows for the table:
+        #   (status, channel, start, end, pct, slope_str, r2, sigma_str)
+        self.trend_rows: List[Tuple[str, str, str, str, float, str, float, str]] = []
+        # Threshold-breach summary lines (one per breached channel).
+        self.threshold_lines: List[str] = []
         self.db_records: List[str] = []                             # rows to append to soak-database.log
 
     def add_event(self, name: str, severity: str, body: str, ts: str = ""):
@@ -163,18 +168,18 @@ class Results:
 
 
 def _read_database(path: Path) -> Tuple[
-    Dict[str, List[Tuple[float, str]]], Optional[datetime], Optional[datetime]
+    Dict[str, List[Tuple[float, str]]], Optional[datetime], Optional[datetime], int
 ]:
     """Walk the soak database. Return:
-        (T history, soak_start, latest_fatal_ts)
-    Latest_fatal_ts is the timestamp of the most recent FATAL E row, or
-    None if there isn't one. Used downstream to reset the trend window
-    after a restart."""
+        (T history, soak_start, latest_fatal_ts, old_alert_count)
+    old_alert_count is the count of A + E rows already on disk, used to
+    show "Alerts (old)" in the run summary."""
     history: Dict[str, List[Tuple[float, str]]] = {}
     soak_start: Optional[datetime] = None
     latest_fatal: Optional[datetime] = None
+    old_alerts = 0
     if not path.exists():
-        return history, soak_start, latest_fatal
+        return history, soak_start, latest_fatal, old_alerts
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line:
             continue
@@ -183,16 +188,23 @@ def _read_database(path: Path) -> Tuple[
             soak_start = _parse_iso(header.group(1).strip()) or soak_start
             continue
         parts = line.split("\t")
-        if len(parts) >= 4 and parts[0] == "T":
+        if not parts:
+            continue
+        tag = parts[0]
+        if tag == "T" and len(parts) >= 4:
             try:
                 history.setdefault(parts[2], []).append((float(parts[3]), parts[1]))
             except ValueError:
                 pass
-        elif len(parts) >= 5 and parts[0] == "E" and parts[2] == "FATAL":
-            when = _parse_iso(parts[1])
-            if when is not None and (latest_fatal is None or when > latest_fatal):
-                latest_fatal = when
-    return history, soak_start, latest_fatal
+        elif tag == "E" and len(parts) >= 5:
+            old_alerts += 1
+            if parts[2] == "FATAL":
+                when = _parse_iso(parts[1])
+                if when is not None and (latest_fatal is None or when > latest_fatal):
+                    latest_fatal = when
+        elif tag == "A":
+            old_alerts += 1
+    return history, soak_start, latest_fatal, old_alerts
 
 
 def _truncate_gds_logs(gds_logs: Optional[Path]) -> None:
@@ -207,19 +219,34 @@ def _truncate_gds_logs(gds_logs: Optional[Path]) -> None:
             print(f"Warning: could not truncate {path}: {exc}")
 
 
+# Threshold rules: suffix -> (predicate, breach_label, extreme_direction, value_suffix).
+# extreme_direction: "max" means worse = higher; "min" means worse = lower.
+_THRESHOLD_RULES = (
+    ("CPU",        lambda v: v > HIGH_CPU_PERCENT,           "High average CPU usage",   "max", "%"),
+    ("NoBuffs",    lambda v: v > 0,                          "Buffer allocation failure", "max", ""),
+    ("EmptyBuffs", lambda v: v > 0,                          "Empty buffer returned",    "max", ""),
+    ("NON_VOLATILE_FREE", lambda v: v < NON_VOLATILE_FREE_FLOOR_KB,
+                                                              "Storage depletion floor",  "min", ""),
+)
+
+
+def _format_threshold_value(suffix: str, value: float, unit: str) -> str:
+    """Threshold value display. Memory-style suffixes get KB->MB/GB scaling;
+    everything else gets a bare :g, optionally with a unit suffix (e.g. %)."""
+    if suffix in MEMORY_SUFFIXES:
+        return _format_value(suffix, value)
+    return f"{value:g}{unit}"
+
+
 def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
             latest_fatal: Optional[datetime]) -> None:
-    """Populate results.alerts, results.trends, and results.db_records.
+    """Populate results.alerts, results.trend_rows, results.threshold_lines,
+    and results.db_records.
 
-    FSW events and threshold breaches come from THIS WINDOW. Trend
-    analysis runs against the FULL HISTORY, which is the union of the
-    database's T rows plus this window's trend channel samples. After a
-    FATAL, history older than the FATAL is dropped from the trend
-    window (but kept in the database)."""
+    FSW events and threshold breaches come from THIS WINDOW. Trend analysis
+    runs against the FULL HISTORY (post-FATAL window only)."""
 
-    # FSW events: emit one alert per failing-severity event in the window.
-    # Track the run-local latest FATAL too, so trend cutoff respects FATALs
-    # that arrived in this very cron tick.
+    # FSW events. Track FATAL timestamps to extend the trend cutoff.
     window_fatal = latest_fatal
     for severity, event_name, body, timestamp in results.events:
         if severity in FSW_ALERT_SEVERITIES:
@@ -232,50 +259,49 @@ def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
                 if when is not None and (window_fatal is None or when > window_fatal):
                     window_fatal = when
 
-    # Walk this window's channels. Trend channels feed the database +
-    # history dict; threshold channels emit per-sample alerts.
+    # Walk this window's channels.
     for channel_name, samples in results.channels.items():
         suffix = channel_name.rsplit(".", 1)[-1]
 
+        # Trend channel: drain into history + DB.
         if suffix in TREND_SUFFIXES:
             for value, ts in samples:
                 history.setdefault(channel_name, []).append((value, ts))
                 results.db_records.append(f"T\t{ts}\t{channel_name}\t{value:g}")
 
-        for value, ts in samples:
-            if suffix == "CPU" and value > HIGH_CPU_PERCENT:
-                msg = f"High average CPU usage: {channel_name} = {value:g}%"
-            elif suffix == "NoBuffs" and value > 0:
-                msg = f"Buffer allocation failure: {channel_name} = {value:g}"
-            elif suffix == "EmptyBuffs" and value > 0:
-                msg = f"Empty buffer returned: {channel_name} = {value:g}"
-            elif suffix == "NON_VOLATILE_FREE" and value < NON_VOLATILE_FREE_FLOOR_KB:
-                msg = (f"Storage depletion floor: {channel_name} = "
-                       f"{_format_value(suffix, value)} below "
-                       f"{_format_value(suffix, NON_VOLATILE_FREE_FLOOR_KB)}")
-            else:
+        # Threshold check: coalesce to one alert per channel per run,
+        # surfacing the extreme value (worst-case) and its timestamp.
+        for rule_suffix, predicate, label, direction, unit in _THRESHOLD_RULES:
+            if suffix != rule_suffix:
                 continue
-            results.emit_alert(TELEMETRY_WARNING, msg, ts,
-                f"A\t{ts}\t{TELEMETRY_WARNING}\t{msg}")
+            breaches = [(v, t) for v, t in samples if predicate(v)]
+            if not breaches:
+                continue
+            picker = max if direction == "max" else min
+            extreme_value, extreme_ts = picker(breaches, key=lambda b: b[0])
+            value_str = _format_threshold_value(suffix, extreme_value, unit)
+            count = len(breaches)
+            line = (f"{channel_name}: peak {value_str} at {extreme_ts} "
+                    f"({count} sample{'s' if count != 1 else ''} breached)")
+            results.threshold_lines.append(line)
+            msg = f"{label}: {line}"
+            results.emit_alert(TELEMETRY_WARNING, msg, extreme_ts,
+                f"A\t{extreme_ts}\t{TELEMETRY_WARNING}\t{msg}")
+            break
 
-    # Trend analysis over the full accumulated history (post-FATAL window only).
+    # Trend analysis over the full accumulated history (post-FATAL window).
     for channel_name, samples in history.items():
         suffix = channel_name.rsplit(".", 1)[-1]
         if suffix not in TREND_SUFFIXES:
             continue
-        # NON_VOLATILE_FREE uses an absolute floor (above), no slope alert.
-        # We still render its trend line under Nominal for visibility.
         is_alert_eligible = suffix in ("MEMORY_USED", "CurrBuffs")
 
-        # Drop samples older than the latest FATAL — typical restart-recovery
-        # behavior shows step changes that ruin the regression.
         if window_fatal is not None:
             samples = [(v, t) for v, t in samples
                        if (_parse_iso(t) or window_fatal) >= window_fatal]
         if len(samples) < MIN_POINTS_FOR_TREND:
             continue
 
-        # Time-based x axis: seconds since first sample in the window.
         first_dt = _parse_iso(samples[0][1])
         if first_dt is None:
             continue
@@ -290,35 +316,25 @@ def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
         if len(ys) < MIN_POINTS_FOR_TREND or xs[-1] == xs[0]:
             continue
 
-        slope, intercept, r_squared, sigma = _linear_regression(xs, ys)  # slope: y_units/second
+        slope, intercept, r_squared, sigma = _linear_regression(xs, ys)
         n = len(ys)
         slope_per_hour = slope * 3600.0
         fitted_first = intercept
         fitted_last = intercept + slope * xs[-1]
         displacement = abs(fitted_last - fitted_first)
-        # Percent change of the fitted line across the soak window.
-        # Fitted endpoints (not raw first/last) so a noisy sample at the
-        # boundary can't dominate.
         denominator = abs(fitted_first) or abs(fitted_last) or 1.0
         percent_change = (fitted_last - fitted_first) / denominator * 100.0
 
-        # Formatting (slope rendered per hour, in MB for KB channels).
         is_kb = suffix in MEMORY_SUFFIXES
         if is_kb:
-            slope_str = f"{slope_per_hour / KB_PER_MB:+.4g} MB/hour"
+            slope_str = f"{slope_per_hour / KB_PER_MB:+.4g} MB/hr"
             sigma_str = f"{sigma / KB_PER_MB:.2f} MB"
         else:
-            slope_str = f"{slope_per_hour:+.4g}/hour"
+            slope_str = f"{slope_per_hour:+.4g}/hr"
             sigma_str = f"{sigma:g}"
-        duration_hours = xs[-1] / 3600.0
-        summary = (
-            f"{_format_value(suffix, ys[0])} -> {_format_value(suffix, ys[-1])} "
-            f"(fit: {percent_change:+.1f}% over {n} samples / {duration_hours:.1f} h, "
-            f"slope={slope_str}, R²={r_squared:.2f}, σ={sigma_str})"
-        )
 
-        # σ displacement floor: skip alerting if the regression's total
-        # movement is less than one σ — the "leak" is buried in noise.
+        # Decide status before deciding what to do with it.
+        status = "OK"
         prefix = ""
         if is_alert_eligible and r_squared >= MIN_TREND_R_SQUARED and displacement >= sigma:
             if suffix == "MEMORY_USED" and percent_change >= MEMORY_LEAK_PERCENT:
@@ -326,30 +342,66 @@ def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
             elif suffix == "CurrBuffs" and percent_change >= BUFFER_LEAK_PERCENT:
                 prefix = "Possible buffer leak"
         if prefix:
+            status = "ALERT"
             ts = samples[-1][1]
-            msg = f"{prefix}: {channel_name}: {summary}"
+            msg = (f"{prefix}: {channel_name}: "
+                   f"{_format_value(suffix, ys[0])} -> {_format_value(suffix, ys[-1])} "
+                   f"(fit: {percent_change:+.1f}% over {n} samples, "
+                   f"slope={slope_str}, R²={r_squared:.2f}, σ={sigma_str})")
             results.emit_alert(TELEMETRY_WARNING, msg, ts,
                 f"A\t{ts}\t{TELEMETRY_WARNING}\t{msg}")
-        else:
-            results.trends.append(f"{channel_name}: {summary}")
+
+        # Always record the trend row, alert or not.
+        results.trend_rows.append((
+            status, channel_name,
+            _format_value(suffix, ys[0]), _format_value(suffix, ys[-1]),
+            percent_change, slope_str, r_squared, sigma_str,
+        ))
 
 
-def _print_summary(results: Results, soak_start: Optional[datetime]) -> None:
+def _print_trend_table(rows, indent: str = "  ") -> None:
+    """Render trend rows as an aligned table."""
+    if not rows:
+        return
+    headers = ("STATUS", "CHANNEL", "START", "END", "Δ", "SLOPE", "R²", "σ")
+    # Pre-render each cell so we can compute column widths.
+    cells = [headers]
+    for status, channel, start_s, end_s, pct, slope_s, r2, sigma_s in rows:
+        cells.append((
+            f"[{status}]", channel, start_s, end_s,
+            f"{pct:+.1f}%", slope_s, f"{r2:.2f}", sigma_s,
+        ))
+    widths = [max(len(row[i]) for row in cells) for i in range(len(headers))]
+    sep = "  "
+    for i, row in enumerate(cells):
+        line = sep.join(cell.ljust(widths[col]) for col, cell in enumerate(row))
+        print(f"{indent}{line}")
+        if i == 0:  # underline header
+            print(f"{indent}{sep.join('-' * w for w in widths)}")
+
+
+def _print_summary(results: Results, soak_start: Optional[datetime],
+                   old_alerts: int) -> None:
     total_samples = sum(len(samples) for samples in results.channels.values())
     print("")
     if soak_start is not None:
         print(f"Soak Started:             {soak_start.isoformat()}")
     print(f"Events Decoded:           {len(results.events)}")
     print(f"Channel Samples Decoded:  {total_samples}")
-    print(f"Alerts:                   {len(results.alerts)}")
+    print(f"Alerts (new):             {len(results.alerts)}")
+    print(f"Alerts (old):             {old_alerts}")
 
-    if not (results.trends or results.alerts):
+    if not (results.trend_rows or results.threshold_lines or results.alerts):
         return
-    print("\nResults Analysis:")
-    if results.trends:
-        print(" Nominal:")
-        for trend in results.trends:
-            print(f"  {trend}")
+    print("")
+    print("Telemetry Analysis:")
+    if results.trend_rows:
+        print(" Trend checks:")
+        _print_trend_table(results.trend_rows, indent="  ")
+    if results.threshold_lines:
+        print(" Threshold checks:")
+        for line in results.threshold_lines:
+            print(f"  {line}")
     if results.alerts:
         print(" Alerts:")
         for severity, message, timestamp in results.alerts:
@@ -391,8 +443,9 @@ def main():
     history: Dict[str, List[Tuple[float, str]]] = {}
     soak_start: Optional[datetime] = None
     latest_fatal: Optional[datetime] = None
+    old_alerts = 0
     if args.soak_database is not None:
-        history, soak_start, latest_fatal = _read_database(args.soak_database)
+        history, soak_start, latest_fatal, old_alerts = _read_database(args.soak_database)
 
     analyze(results, history, latest_fatal)
 
@@ -401,7 +454,7 @@ def main():
             fh.write("\n".join(results.db_records) + "\n")
     _truncate_gds_logs(args.gds_logs)
 
-    _print_summary(results, soak_start)
+    _print_summary(results, soak_start, old_alerts)
     sys.exit(1 if any(s in FAILING_SEVERITIES for s, _, _ in results.alerts) else 0)
 
 
