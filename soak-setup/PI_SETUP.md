@@ -34,7 +34,7 @@ In the `nmtui` interface:
 4. Configure the following:
    - **IPv4 CONFIGURATION**: Change from `<Automatic>` to `<Manual>`
    - Select **"Show"** next to IPv4 CONFIGURATION
-   - **Addresses**: Add `192.168.100.1/24` (or `192.168.10.1/24` to match your setup)
+   - **Addresses**: Add `192.168.10.1/24` (adjust to match your chosen subnet)
    - **Gateway**: Leave empty (direct connection)
    - **DNS servers**: Leave empty or use your existing DNS
 5. Select **"OK"** at the bottom
@@ -45,8 +45,10 @@ In the `nmtui` interface:
 Verify the configuration:
 ```bash
 ip addr show
-# You should see 192.168.100.1 on your ethernet interface
+# You should see 192.168.10.1 on your ethernet interface
 ```
+
+**Example for this setup**: Use `192.168.10.1/24` for Pi 1
 
 ### 2. Install Dependencies
 
@@ -63,14 +65,19 @@ sudo apt-get install -y openssh-client
 
 ### 3. Generate SSH Key for FSW Pi Access
 
-```bash
-# Generate key as the runner user
-ssh-keygen -t ed25519 -f ~/.ssh/id_fsw_pi -C "gds-runner-to-fsw"
+**CRITICAL**: Run this as the user that runs the GitHub Actions runner (e.g., `fprime` user on Pi 1):
 
-# Leave passphrase empty (required for automation)
+```bash
+# Switch to runner user if needed
+# sudo su - fprime
+
+# Generate key
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -C "gds-runner-to-fsw"
+
+# Press Enter twice to skip passphrase (required for automation)
 ```
 
-**Important**: The key must be generated as the user that runs the GitHub Actions runner.
+**Important**: The key must be generated as the user that runs the GitHub Actions runner, not as root or your personal user.
 
 ### 4. GitHub Actions Runner
 
@@ -82,13 +89,15 @@ If not already installed, follow GitHub's runner setup instructions for your rep
 
 ### 1. Create User Account
 
-Create a user matching what you'll use in `FSW_PI_HOST` (e.g., `pi`):
+Create a user matching what you'll use in `fsw-host` workflow parameter. **This username must match exactly** (e.g., if workflow uses `fprime@192.168.10.2`, create user `fprime`):
 
 ```bash
-# If user doesn't exist
-sudo adduser pi
-sudo usermod -aG sudo pi
+# If user doesn't exist (replace 'fprime' with your chosen username)
+sudo adduser fprime
+sudo usermod -aG sudo fprime
 ```
+
+**Important**: The username in `fsw-host: "username@ip"` must exist on Pi 2.
 
 ### 2. Configure Static IP for Ethernet Interface
 
@@ -105,7 +114,7 @@ In the `nmtui` interface:
 4. Configure the following:
    - **IPv4 CONFIGURATION**: Change from `<Automatic>` to `<Manual>`
    - Select **"Show"** next to IPv4 CONFIGURATION
-   - **Addresses**: Add `192.168.100.2/24` (or `192.168.10.2/24` to match your setup)
+   - **Addresses**: Add `192.168.10.2/24` (must be same subnet as Pi 1)
    - **Gateway**: Leave empty (direct connection)
    - **DNS servers**: Leave empty or use your existing DNS
 5. Select **"OK"** at the bottom
@@ -116,8 +125,10 @@ In the `nmtui` interface:
 Verify the configuration:
 ```bash
 ip addr show
-# You should see 192.168.100.2 on your ethernet interface
+# You should see 192.168.10.2 on your ethernet interface
 ```
+
+**Example for this setup**: Use `192.168.10.2/24` for Pi 2
 
 ### 3. Enable SSH
 
@@ -132,14 +143,16 @@ sudo systemctl start ssh
 sudo visudo
 ```
 
-Add at the end (replace `pi` with your username):
+Add at the end (replace `fprime` with your actual username):
 ```
-pi ALL=(ALL) NOPASSWD: /bin/systemctl daemon-reload, /bin/systemctl enable, /bin/systemctl disable, /bin/systemctl start, /bin/systemctl stop, /bin/systemctl restart, /bin/systemctl status, /bin/systemctl is-active, /usr/bin/journalctl, /bin/mv /tmp/fprime-soak-fsw.service /etc/systemd/system/fprime-soak-fsw.service
+fprime ALL=(ALL) NOPASSWD: /bin/systemctl daemon-reload, /bin/systemctl enable, /bin/systemctl disable, /bin/systemctl start, /bin/systemctl stop, /bin/systemctl restart, /bin/systemctl status, /bin/systemctl is-active, /usr/bin/journalctl, /bin/mv /tmp/fprime-soak-fsw.service /etc/systemd/system/fprime-soak-fsw.service, /usr/bin/rm, /usr/bin/ss
 ```
 
-Or for full sudo access (less secure):
+**Important**: Also add `/usr/bin/rm` and `/usr/bin/ss` for the deployment script to work properly.
+
+Or for full sudo access (less secure but simpler):
 ```
-pi ALL=(ALL) NOPASSWD: ALL
+fprime ALL=(ALL) NOPASSWD: ALL
 ```
 
 ### 5. Install Dependencies
@@ -151,39 +164,33 @@ sudo apt-get install -y systemd
 
 ### 6. Set Up SSH Key Authentication
 
-From **Pi 1 (GDS Runner)**, copy the SSH key:
+From **Pi 1 (GDS Runner)**, as the runner user, copy the SSH key to Pi 2:
 
 ```bash
-# From Pi 1
-ssh-copy-id -i ~/.ssh/id_fsw_pi pi@192.168.100.2
+# From Pi 1, as the runner user (e.g., fprime)
+ssh-copy-id -i ~/.ssh/id_ed25519 fprime@192.168.10.2
 ```
 
-You'll be prompted for the password once. After this, test passwordless SSH:
+You'll be prompted for the Pi 2 user's password once. After this, test passwordless SSH:
 
 ```bash
-ssh -i ~/.ssh/id_fsw_pi pi@192.168.100.2 "echo SSH works"
+# Should work without password
+ssh fprime@192.168.10.2 "echo SSH works"
 ```
 
-### 7. Configure SSH on Pi 1 for Automatic Key Usage
+**Troubleshooting**: If you get "Permission denied", ensure:
+1. You're running as the runner user on Pi 1
+2. The username matches on both Pis
+3. SSH service is running on Pi 2: `sudo systemctl status ssh`
 
-On **Pi 1**, create/edit SSH config:
+### 7. Verify SSH Key Permissions
+
+On **Pi 1**, ensure correct permissions:
 
 ```bash
-nano ~/.ssh/config
-```
-
-Add:
-```
-Host fsw-pi
-    HostName 192.168.100.2
-    User pi
-    IdentityFile ~/.ssh/id_fsw_pi
-    StrictHostKeyChecking no
-```
-
-Test with the alias:
-```bash
-ssh fsw-pi "echo Works with alias"
+chmod 700 ~/.ssh
+chmod 600 ~/.ssh/id_ed25519
+chmod 644 ~/.ssh/id_ed25519.pub
 ```
 
 ---
@@ -194,7 +201,7 @@ ssh fsw-pi "echo Works with alias"
 2. Verify connectivity from Pi 1:
 
 ```bash
-ping -c 4 192.168.100.2
+ping -c 4 192.168.10.2
 ```
 
 If ping fails:
@@ -207,15 +214,34 @@ If ping fails:
 
 ## GitHub Repository Setup
 
-### 1. Add GitHub Secrets
+### 1. Update Workflow Configuration
 
-In your fprime repository (Settings → Secrets and variables → Actions):
+In your workflow file (e.g., `ext-aarch64-linux-led-blinker-soak-setup.yml`), configure the deployment step:
 
-- **Name**: `FSW_PI_HOST`
-  - **Value**: `pi@192.168.100.2` (or use the alias: `fsw-pi`)
+```yaml
+- name: "Deploy FSW + persistent GDS services"
+  uses: moisesmata/fprime-actions/soak-setup@soak-actions-improvements
+  with:
+    platform: linux-remote
+    fsw-host: "fprime@192.168.10.2"  # Use format: username@ip-address
+    fsw-ip: "192.168.10.2"
+    fsw-args: "-a 0.0.0.0 -p 50000"
+    gds-args: "--communication-selection ip --ip-address 192.168.10.2 --ip-port 50000 --ip-client --zmq-transport ipc:///tmp/fprime-server-in ipc:///tmp/fprime-server-out"
+```
 
-- **Name**: `FSW_PI_IP`
-  - **Value**: `192.168.100.2`
+**Key configuration points:**
+- `platform: linux-remote` - Uses the two-Pi deployment script
+- `fsw-host` - SSH target in format `username@ip-address` (must match the user on Pi 2)
+- `fsw-ip` - IP address where FSW will listen
+- `fsw-args: "-a 0.0.0.0 -p 50000"` - FSW binds to all interfaces on port 50000
+- `gds-args` - Critical flags:
+  - `--communication-selection ip` - Use TCP/IP to connect to remote FSW
+  - `--ip-address <FSW_IP>` - Where FSW is running
+  - `--ip-port 50000` - FSW port
+  - `--ip-client` - GDS acts as client connecting to FSW server
+  - `--zmq-transport ...` - Creates ZMQ sockets for integration tests
+
+**Note**: Replace IP addresses with your actual network configuration (e.g., `192.168.10.1` and `192.168.10.2` or `192.168.100.1` and `192.168.100.2`).
 
 ### 2. Verify Runner Labels
 
@@ -232,20 +258,20 @@ Check in: Repository Settings → Actions → Runners
 
 ### 1. Test Network Connectivity
 
-From Pi 1:
+From Pi 1 (as the runner user):
 ```bash
 # Ping test
-ping -c 4 192.168.100.2
+ping -c 4 192.168.10.2
 
-# SSH test
-ssh pi@192.168.100.2 "echo SSH connection successful"
+# SSH test (use your actual username)
+ssh fprime@192.168.10.2 "echo SSH connection successful"
 ```
 
 ### 2. Test Sudo Commands
 
 From Pi 1:
 ```bash
-ssh pi@192.168.100.2 "sudo systemctl daemon-reload && echo Sudo works"
+ssh fprime@192.168.10.2 "sudo systemctl daemon-reload && echo Sudo works"
 ```
 
 ### 3. Test File Transfer
@@ -253,8 +279,8 @@ ssh pi@192.168.100.2 "sudo systemctl daemon-reload && echo Sudo works"
 From Pi 1:
 ```bash
 echo "test" > /tmp/test.txt
-scp /tmp/test.txt pi@192.168.100.2:/tmp/
-ssh pi@192.168.100.2 "cat /tmp/test.txt"
+scp /tmp/test.txt fprime@192.168.10.2:/tmp/
+ssh fprime@192.168.10.2 "cat /tmp/test.txt"
 ```
 
 ### 4. Test Port Connectivity
@@ -262,30 +288,38 @@ ssh pi@192.168.100.2 "cat /tmp/test.txt"
 From Pi 1:
 ```bash
 # Install netcat if needed
-sudo apt-get install -y netcat
+sudo apt-get install -y netcat-openbsd
 
-# On Pi 2, open a test port
-ssh pi@192.168.100.2 "nc -l 50000 &"
-
-# On Pi 1, connect to it
-nc -zv 192.168.100.2 50000
+# Test if port 50000 is reachable
+nc -zv 192.168.10.2 50000
 ```
 
-### 5. Manual Deployment Test
+### 5. Verify ZMQ Socket Creation
 
-Create a minimal test binary on Pi 1:
+After running the workflow setup, verify the GDS created ZMQ sockets on Pi 1:
+
 ```bash
-echo '#!/bin/bash' > /tmp/test_fsw
-echo 'echo "FSW running on $(hostname)"' >> /tmp/test_fsw
-echo 'sleep 10' >> /tmp/test_fsw
-chmod +x /tmp/test_fsw
+# On Pi 1
+ls -la /tmp/fprime-server-*
+# Should show: fprime-server-in and fprime-server-out
 
-# Copy to Pi 2
-ssh pi@192.168.100.2 "mkdir -p /home/pi/fprime-soak/bin"
-scp /tmp/test_fsw pi@192.168.100.2:/home/pi/fprime-soak/bin/fsw
+# Check GDS is running
+sudo systemctl status fprime-soak-gds
 
-# Run it remotely
-ssh pi@192.168.100.2 "/home/pi/fprime-soak/bin/fsw"
+# Check GDS logs
+sudo journalctl -u fprime-soak-gds -n 50 --no-pager
+```
+
+### 6. Verify FSW is Running on Pi 2
+
+From Pi 1:
+```bash
+# Check FSW service status
+ssh fprime@192.168.10.2 "sudo systemctl status fprime-soak-fsw"
+
+# Check FSW is listening on port 50000
+ssh fprime@192.168.10.2 "sudo ss -tulpn | grep 50000"
+# Should show the FSW binary listening on 0.0.0.0:50000 or 192.168.10.2:50000
 ```
 
 ---
@@ -309,9 +343,22 @@ sudo systemctl restart ssh
 - Check if interface is up: `sudo ip link set eth0 up`
 
 ### FSW Binary Not Executing
-- Check permissions: `ls -l /home/pi/fprime-soak/bin/fsw`
-- Check it's the correct architecture: `file /home/pi/fprime-soak/bin/fsw`
-- Try running manually: `ssh pi@192.168.100.2 "/home/pi/fprime-soak/bin/fsw -h"`
+- Check permissions: `ssh fprime@192.168.10.2 "ls -l /home/fprime/fprime-soak/bin/fsw"`
+- Check it's the correct architecture: `ssh fprime@192.168.10.2 "file /home/fprime/fprime-soak/bin/fsw"`
+- Check FSW logs: `ssh fprime@192.168.10.2 "sudo journalctl -u fprime-soak-fsw -n 50"`
+
+### Integration Tests Timeout
+If integration tests can't send commands:
+- Verify ZMQ sockets exist: `ls -la /tmp/fprime-server-*` on Pi 1
+- Check GDS args include: `--zmq-transport ipc:///tmp/fprime-server-in ipc:///tmp/fprime-server-out`
+- Verify GDS service file: `cat /etc/systemd/system/fprime-soak-gds.service`
+- Check GDS is connected to FSW: `sudo journalctl -u fprime-soak-gds -n 100 | grep -i connect`
+
+### GDS Not Connecting to Remote FSW
+- Verify FSW is listening: `ssh fprime@192.168.10.2 "sudo ss -tulpn | grep 50000"`
+- Test port connectivity: `nc -zv 192.168.10.2 50000`
+- Check GDS logs for connection errors: `sudo journalctl -u fprime-soak-gds -n 100`
+- Verify GDS args include: `--communication-selection ip --ip-address 192.168.10.2 --ip-port 50000 --ip-client`
 
 ### Firewall Issues
 ```bash
@@ -328,9 +375,9 @@ sudo ufw allow 50000
 
 1. **Network Isolation**: The direct ethernet connection creates an isolated network. No internet traffic can reach Pi 2 unless you configure routing.
 
-2. **SSH Key Protection**: Keep the private key (`~/.ssh/id_fsw_pi`) on Pi 1 secure. It should only be readable by the runner user:
+2. **SSH Key Protection**: Keep the private key (`~/.ssh/id_ed25519`) on Pi 1 secure. It should only be readable by the runner user:
    ```bash
-   chmod 600 ~/.ssh/id_fsw_pi
+   chmod 600 ~/.ssh/id_ed25519
    ```
 
 3. **Limited Sudo**: The recommended sudo configuration only allows specific systemctl commands. This is more secure than `NOPASSWD: ALL`.
@@ -344,8 +391,40 @@ sudo ufw allow 50000
 If you prefer not to use a direct cable, you can connect both Pis to a dedicated switch or router:
 
 1. Connect both Pis to the switch via ethernet
-2. Configure static IPs on the same subnet (e.g., 192.168.100.1 and 192.168.100.2)
-3. Add a gateway if needed: `gateway4: 192.168.100.254`
+2. Configure static IPs on the same subnet (e.g., 192.168.10.1 and 192.168.10.2)
+3. Add a gateway if needed in nmtui (optional)
 4. The rest of the setup remains identical
 
 This approach allows easier expansion if you want to add more FSW Pis in the future.
+
+---
+
+## Summary of Working Configuration
+
+Based on successful deployment, here's what works:
+
+**Network:**
+- Pi 1 (GDS): `192.168.10.1/24`
+- Pi 2 (FSW): `192.168.10.2/24`
+- Direct ethernet connection (no gateway needed)
+
+**Users:**
+- Same username on both Pis (e.g., `fprime`)
+- SSH key authentication with `~/.ssh/id_ed25519`
+
+**Workflow Configuration:**
+```yaml
+platform: linux-remote
+fsw-host: "fprime@192.168.10.2"
+fsw-ip: "192.168.10.2"
+fsw-args: "-a 0.0.0.0 -p 50000"
+gds-args: "--communication-selection ip --ip-address 192.168.10.2 --ip-port 50000 --ip-client --zmq-transport ipc:///tmp/fprime-server-in ipc:///tmp/fprime-server-out"
+```
+
+**Services:**
+- Pi 1: `fprime-soak-gds.service` (GDS with ZMQ sockets + TCP/IP client to FSW)
+- Pi 2: `fprime-soak-fsw.service` (FSW binary listening on 0.0.0.0:50000)
+
+**Integration Tests:**
+- Connect to GDS via ZMQ: `ipc:///tmp/fprime-server-in` and `ipc:///tmp/fprime-server-out`
+- GDS forwards commands to FSW at `192.168.10.2:50000`
