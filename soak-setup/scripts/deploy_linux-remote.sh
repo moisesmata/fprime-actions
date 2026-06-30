@@ -11,11 +11,12 @@
 
 set -euo pipefail
 
-INSTALL_DIR="${HOME}/fprime-soak"
-TEMPLATES="${ACTION_PATH}/templates"
-REMOTE_INSTALL_DIR="/home/$(echo "${FSW_HOST}" | cut -d@ -f1)/fprime-soak"
-
 # Validate required environment variables
+if [ -z "${DEPLOYMENT_NAME:-}" ]; then
+  echo "::error::DEPLOYMENT_NAME is required"
+  exit 1
+fi
+
 if [ -z "${FSW_HOST:-}" ]; then
   echo "::error::FSW_HOST is required for linux-remote platform"
   exit 1
@@ -26,6 +27,12 @@ if [ -z "${FSW_IP:-}" ]; then
   exit 1
 fi
 
+# Namespace by deployment name
+INSTALL_DIR="${HOME}/fprime-soak-${DEPLOYMENT_NAME}"
+TEMPLATES="${ACTION_PATH}/templates"
+REMOTE_INSTALL_DIR="/home/$(echo "${FSW_HOST}" | cut -d@ -f1)/fprime-soak-${DEPLOYMENT_NAME}"
+SERVICE_NAME="fprime-soak-fsw-${DEPLOYMENT_NAME}"
+
 render() {
   sed -e "s#__INSTALL_DIR__#${REMOTE_INSTALL_DIR}#g" \
       -e "s#__SERVICE_USER__#$(echo "${FSW_HOST}" | cut -d@ -f1)#g" \
@@ -35,7 +42,7 @@ render() {
 echo "[INFO] Deploying FSW to remote host: ${FSW_HOST}"
 
 # Stop FSW service first to release any file locks
-ssh "${FSW_HOST}" "sudo systemctl stop fprime-soak-fsw 2>/dev/null || true"
+ssh "${FSW_HOST}" "sudo systemctl stop ${SERVICE_NAME} 2>/dev/null || true"
 
 # Clean up and recreate remote directories with correct ownership
 ssh "${FSW_HOST}" "sudo rm -rf ${REMOTE_INSTALL_DIR} && mkdir -p ${REMOTE_INSTALL_DIR}/bin"
@@ -47,24 +54,24 @@ ssh "${FSW_HOST}" "chmod +x ${REMOTE_INSTALL_DIR}/bin/fsw"
 
 # Render and deploy systemd service file
 echo "[INFO] Deploying systemd service to ${FSW_HOST}"
-render "${TEMPLATES}/fsw-remote.service.template" > /tmp/fprime-soak-fsw.service
-scp /tmp/fprime-soak-fsw.service "${FSW_HOST}:/tmp/fprime-soak-fsw.service"
-ssh "${FSW_HOST}" "sudo mv /tmp/fprime-soak-fsw.service /etc/systemd/system/fprime-soak-fsw.service"
+render "${TEMPLATES}/fsw-remote.service.template" > /tmp/${SERVICE_NAME}.service
+scp /tmp/${SERVICE_NAME}.service "${FSW_HOST}:/tmp/${SERVICE_NAME}.service"
+ssh "${FSW_HOST}" "sudo mv /tmp/${SERVICE_NAME}.service /etc/systemd/system/${SERVICE_NAME}.service"
 
 # Stop old service, reload systemd, enable and start new service
 echo "[INFO] Starting FSW service on ${FSW_HOST}"
-ssh "${FSW_HOST}" "sudo systemctl disable --now fprime-soak-fsw 2>/dev/null || true"
+ssh "${FSW_HOST}" "sudo systemctl disable --now ${SERVICE_NAME} 2>/dev/null || true"
 ssh "${FSW_HOST}" "sudo systemctl daemon-reload"
-ssh "${FSW_HOST}" "sudo systemctl enable --now fprime-soak-fsw"
+ssh "${FSW_HOST}" "sudo systemctl enable --now ${SERVICE_NAME}"
 
 # Verify FSW started on remote Pi
 echo "[INFO] Verifying FSW service on ${FSW_HOST}"
-if ssh "${FSW_HOST}" "sudo systemctl is-active --quiet fprime-soak-fsw"; then
-  echo "[INFO] fprime-soak-fsw is active on ${FSW_HOST}"
+if ssh "${FSW_HOST}" "sudo systemctl is-active --quiet ${SERVICE_NAME}"; then
+  echo "[INFO] ${SERVICE_NAME} is active on ${FSW_HOST}"
   exit 0
 fi
 
-echo "::error::fprime-soak-fsw failed to start on ${FSW_HOST}"
-ssh "${FSW_HOST}" "sudo systemctl status fprime-soak-fsw --no-pager -l" || true
-ssh "${FSW_HOST}" "sudo journalctl -u fprime-soak-fsw --no-pager -n 40" || true
+echo "::error::${SERVICE_NAME} failed to start on ${FSW_HOST}"
+ssh "${FSW_HOST}" "sudo systemctl status ${SERVICE_NAME} --no-pager -l" || true
+ssh "${FSW_HOST}" "sudo journalctl -u ${SERVICE_NAME} --no-pager -n 40" || true
 exit 1

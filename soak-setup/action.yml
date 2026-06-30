@@ -1,6 +1,9 @@
 name: "F´ Soak Deploy"
 description: "Install a built F´ deployment on a target platform in preparation for soak testing."
 inputs:
+  deployment-name:
+    description: "Unique deployment name (e.g. 'ledblinker', 'pico2-ref'). Used to namespace services, directories, and ZMQ sockets when running multiple deployments on one runner."
+    required: true
   platform:
     description: "Platform (e.g. 'linux'). Selects scripts/deploy_<platform>.sh."
     required: true
@@ -20,6 +23,14 @@ inputs:
     description: "IP address where FSW listens (used by GDS to connect). Required for linux-remote platform."
     required: false
     default: ""
+  fsw-device:
+    description: "Serial device path for FSW UART (e.g. '/dev/pico2'). Used for pico2 platform."
+    required: false
+    default: "/dev/pico2"
+  fsw-hex:
+    description: "Path to FSW hex file (for Pico 2/Zephyr deployments)."
+    required: false
+    default: ""
 runs:
   using: "composite"
   steps:
@@ -27,14 +38,19 @@ runs:
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
+        DEPLOYMENT_NAME: ${{ inputs.deployment-name }}
         GDS_ARGS: ${{ inputs.gds-args }}
+        PLATFORM: ${{ inputs.platform }}
       run: ${{ github.action_path }}/scripts/setup.sh
     - name: "Soak deploy (${{ inputs.platform }})"
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
+        DEPLOYMENT_NAME: ${{ inputs.deployment-name }}
         FSW_ARGS: ${{ inputs.fsw-args }}
         GDS_ARGS: ${{ inputs.gds-args }}
         FSW_HOST: ${{ inputs.fsw-host }}
         FSW_IP: ${{ inputs.fsw-ip }}
+        FSW_DEVICE: ${{ inputs.fsw-device }}
+        FSW_HEX: ${{ inputs.fsw-hex }}
       run: ${{ github.action_path }}/scripts/deploy_${{ inputs.platform }}.sh

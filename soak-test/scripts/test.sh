@@ -4,7 +4,14 @@
 
 set -uo pipefail
 
-INSTALL_DIR="${HOME}/fprime-soak"
+# Validate required environment variables
+if [ -z "${DEPLOYMENT_NAME:-}" ]; then
+  echo "::error::DEPLOYMENT_NAME is required"
+  exit 1
+fi
+
+# Namespace by deployment name
+INSTALL_DIR="${HOME}/fprime-soak-${DEPLOYMENT_NAME}"
 DICT=$(ls "${INSTALL_DIR}"/dict/*TopologyDictionary.json)
 
 # Analyze accumulated telemetry. Checks GDS text logs first
