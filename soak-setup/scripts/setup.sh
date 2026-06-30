@@ -42,7 +42,7 @@ python3 -m venv "${INSTALL_DIR}/venv"
 
 echo "[INFO] Soak Setup Complete: ${INSTALL_DIR}"
 
-# Setup and start GDS service
+# Setup and start GDS service on this runner
 sudo systemctl disable --now "fprime-soak-gds" 2>/dev/null || true
 render "${TEMPLATES}/gds.service.template" \
 | sudo tee "/etc/systemd/system/fprime-soak-gds.service" >/dev/null

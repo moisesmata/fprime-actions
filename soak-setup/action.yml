@@ -12,6 +12,14 @@ inputs:
     description: "Arguments passed to the FSW binary (e.g. '-a 127.0.0.1 -p 50000')."
     required: false
     default: "-a 127.0.0.1 -p 50000"
+  fsw-host:
+    description: "Remote SSH host for FSW deployment (e.g. 'pi@192.168.1.100'). Required for linux-remote platform."
+    required: false
+    default: ""
+  fsw-ip:
+    description: "IP address where FSW listens (used by GDS to connect). Required for linux-remote platform."
+    required: false
+    default: ""
 runs:
   using: "composite"
   steps:
@@ -27,4 +35,6 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
         FSW_ARGS: ${{ inputs.fsw-args }}
         GDS_ARGS: ${{ inputs.gds-args }}
+        FSW_HOST: ${{ inputs.fsw-host }}
+        FSW_IP: ${{ inputs.fsw-ip }}
       run: ${{ github.action_path }}/scripts/deploy_${{ inputs.platform }}.sh

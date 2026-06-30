@@ -474,6 +474,8 @@ def _print_summary(results: Results, soak_start: Optional[datetime],
             print(f"  {severity} - {message}{ts}{_format_elapsed(timestamp, soak_start)}")
         print("")
 
+    print("")
+
 
 class SoakArgs(ParserBase):
     DESCRIPTION = "F´ Soak Test Monitor"
