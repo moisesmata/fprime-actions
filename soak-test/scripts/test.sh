@@ -27,9 +27,16 @@ monitor_rc=$?
 echo "[INFO] Running integration tests"
 cd "${INSTALL_DIR}/test"
 . "${INSTALL_DIR}/venv/bin/activate"
+
+# Use namespaced ZMQ sockets so tests connect to the correct GDS
+ZMQ_IN="ipc:///tmp/fprime-server-${DEPLOYMENT_NAME}-in"
+ZMQ_OUT="ipc:///tmp/fprime-server-${DEPLOYMENT_NAME}-out"
+
 # Override pytest's default python_files=test_*.py so deployments that name
 # tests <something>_integration_tests.py (e.g. led-blinker) still get collected.
-pytest -o python_files='*.py' --dictionary "${DICT}"
+pytest -o python_files='*.py' \
+  --dictionary "${DICT}" \
+  --zmq-transport "${ZMQ_IN}" "${ZMQ_OUT}"
 pytest_rc=$?
 
 # Exit with proper return value
