@@ -34,8 +34,11 @@ render() {
 
 echo "[INFO] Deploying FSW to remote host: ${FSW_HOST}"
 
-# Create remote directories
-ssh "${FSW_HOST}" "mkdir -p ${REMOTE_INSTALL_DIR}/bin"
+# Stop FSW service first to release any file locks
+ssh "${FSW_HOST}" "sudo systemctl stop fprime-soak-fsw 2>/dev/null || true"
+
+# Clean up and recreate remote directories with correct ownership
+ssh "${FSW_HOST}" "sudo rm -rf ${REMOTE_INSTALL_DIR} && mkdir -p ${REMOTE_INSTALL_DIR}/bin"
 
 # Copy FSW binary to remote Pi
 echo "[INFO] Copying FSW binary to ${FSW_HOST}"
