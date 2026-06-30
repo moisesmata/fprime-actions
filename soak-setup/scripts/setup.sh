@@ -40,21 +40,43 @@ echo "# SOAK STARTED $(date +%Y-%m-%dT%H:%M:%S)" > "${INSTALL_DIR}/soak-database
 # Platform-specific artifact handling
 PLATFORM="${PLATFORM:-linux}"
 
-if [[ "${PLATFORM}" == "pico2" ]]; then
-  # Pico 2 (Zephyr) artifacts
+if [[ "${PLATFORM}" == "pico2-fprime-ci" ]]; then
+  # Pico 2 via fprime-ci flow - archive.tar.gz was already extracted by fprime-ci
+  # build outputs are in ./build-artifacts/
+  echo "[INFO] Setting up Pico 2 artifacts from fprime-ci build"
+
+  # fprime-ci extracted archive.tar.gz into ./build-artifacts/
+  # Find the dictionary (location defined in pico2.yml)
+  DICT_FILE=$(find ./build-artifacts -name "*TopologyDictionary.json" | head -n 1)
+  if [ -z "${DICT_FILE}" ]; then
+    echo "::error::Could not find TopologyDictionary.json in build-artifacts"
+    exit 1
+  fi
+  echo "[INFO] Found dictionary: ${DICT_FILE}"
+  cp "${DICT_FILE}" "${INSTALL_DIR}/dict/"
+
+  # Copy integration tests (path defined in pico2.yml test-scripts)
+  # These should be in the working directory after extraction
+  for test_script in $(find . -path ./lib -prune -o -path ./build-artifacts -prune -o -name "*_integration_tests.py" -print -o -name "test_*.py" -print 2>/dev/null); do
+    if [ -f "${test_script}" ]; then
+      cp "${test_script}" "${INSTALL_DIR}/test/"
+    fi
+  done
+
+  # Copy any int test directory if it exists
+  if [ -d "artifacts/int" ]; then
+    cp -r artifacts/int/. "${INSTALL_DIR}/test/"
+  fi
+
+elif [[ "${PLATFORM}" == "pico2" ]]; then
+  # Pico 2 (Zephyr) artifacts - legacy custom flow
   echo "[INFO] Setting up Pico 2 (Zephyr) artifacts"
   cp artifacts/build-artifacts/zephyr.hex "${INSTALL_DIR}/bin/"
   cp artifacts/build-artifacts/zephyr/fprime-zephyr-deployment/dict/*TopologyDictionary.json "${INSTALL_DIR}/dict/" 2>/dev/null || \
     cp artifacts/build-artifacts/zephyr/dict/*TopologyDictionary.json "${INSTALL_DIR}/dict/"
 
-  # Copy test files
   if [ -d "artifacts/int" ]; then
     cp -r artifacts/int/. "${INSTALL_DIR}/test/"
-  fi
-
-  # Optional: copy OpenOCD config if provided
-  if [ -f "artifacts/openocd.cfg" ]; then
-    cp artifacts/openocd.cfg "${INSTALL_DIR}/"
   fi
 else
   # Standard Linux artifacts
@@ -77,7 +99,7 @@ echo "[INFO] Soak Setup Complete: ${INSTALL_DIR}"
 sudo systemctl disable --now "${SERVICE_NAME}" 2>/dev/null || true
 
 # Select appropriate GDS service template based on platform
-if [[ "${PLATFORM}" == "pico2" ]]; then
+if [[ "${PLATFORM}" == "pico2" ]] || [[ "${PLATFORM}" == "pico2-fprime-ci" ]]; then
   GDS_TEMPLATE="${TEMPLATES}/gds-pico2.service.template"
 else
   GDS_TEMPLATE="${TEMPLATES}/gds.service.template"
