@@ -1,56 +1,51 @@
 name: "F´ Soak Deploy"
-description: "Install a built F´ deployment on a target platform in preparation for soak testing."
+description: "Install a built F´ deployment on a target platform and start a persistent GDS service for soak testing."
+
 inputs:
   deployment-name:
-    description: "Unique deployment name (e.g. 'ledblinker', 'pico2-ref'). Used to namespace services, directories, and ZMQ sockets when running multiple deployments on one runner."
+    description: "Unique deployment name (e.g. 'ledblinker', 'pico2-ref'). Namespaces install dir, systemd service, and ZMQ sockets so multiple deployments can run on one runner."
     required: true
   platform:
-    description: "Platform (e.g. 'linux'). Selects scripts/deploy_<platform>.sh."
+    description: "Platform: 'linux' | 'linux-remote' | 'pico2'. Selects scripts/deploy_<platform>.sh."
     required: true
-  gds-args:
-    description: "Extra arguments appended to fprime-gds (e.g. '--framing-selection fprime-framing')."
-    required: false
-    default: ""
-  fsw-args:
-    description: "Arguments passed to the FSW binary (e.g. '-a 127.0.0.1 -p 50000')."
-    required: false
-    default: "-a 127.0.0.1 -p 50000"
-  fsw-host:
-    description: "Remote SSH host for FSW deployment (e.g. 'pi@192.168.1.100'). Required for linux-remote platform."
-    required: false
-    default: ""
   fsw-ip:
-    description: "IP address where FSW listens (used by GDS to connect). Required for linux-remote platform."
+    description: "IP address of the remote FSW Pi (linux-remote only). SSH user is assumed to be 'fprime'. Used to derive both the SSH target and the address GDS connects to."
     required: false
     default: ""
+  fsw-port:
+    description: "Port FSW listens on. Used for linux-remote."
+    required: false
+    default: "50000"
   fsw-device:
-    description: "Serial device path for FSW UART (e.g. '/dev/pico2'). Used for pico2 platform."
+    description: "Serial device path for FSW UART (pico2 only)."
     required: false
     default: "/dev/pico2"
-  fsw-hex:
-    description: "Path to FSW hex file (for Pico 2/Zephyr deployments)."
+  gds-args:
+    description: "Extra arguments appended to fprime-gds. For linux-remote, the --communication-selection/--ip-address/--ip-port flags are added automatically — only include other flags here. The --zmq-transport flag is also added automatically."
     required: false
     default: ""
+
 runs:
   using: "composite"
   steps:
-    - name: "Soak Setup"
+    - name: "Soak setup (stage artifacts + start GDS)"
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
         DEPLOYMENT_NAME: ${{ inputs.deployment-name }}
-        GDS_ARGS: ${{ inputs.gds-args }}
         PLATFORM: ${{ inputs.platform }}
+        FSW_IP: ${{ inputs.fsw-ip }}
+        FSW_PORT: ${{ inputs.fsw-port }}
+        FSW_DEVICE: ${{ inputs.fsw-device }}
+        GDS_ARGS: ${{ inputs.gds-args }}
       run: ${{ github.action_path }}/scripts/setup.sh
+
     - name: "Soak deploy (${{ inputs.platform }})"
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
         DEPLOYMENT_NAME: ${{ inputs.deployment-name }}
-        FSW_ARGS: ${{ inputs.fsw-args }}
-        GDS_ARGS: ${{ inputs.gds-args }}
-        FSW_HOST: ${{ inputs.fsw-host }}
         FSW_IP: ${{ inputs.fsw-ip }}
+        FSW_PORT: ${{ inputs.fsw-port }}
         FSW_DEVICE: ${{ inputs.fsw-device }}
-        FSW_HEX: ${{ inputs.fsw-hex }}
       run: ${{ github.action_path }}/scripts/deploy_${{ inputs.platform }}.sh

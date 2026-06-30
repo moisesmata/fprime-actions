@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 #
-# Linux/systemd deploy: render unit files from templates, then enable and
-# (re)start them. Sudo only for systemctl, journalctl, and writes into
-# /etc/systemd/system/.
+# Linux/systemd deploy: render FSW unit file, enable and start it locally.
+# (FSW and GDS both run on the same machine.)
+#
+# Required environment:
+#   DEPLOYMENT_NAME : unique deployment name for namespacing
+#   ACTION_PATH     : path to the soak-setup action (provides templates/)
+#   FSW_ARGS        : arguments passed to the FSW binary
+
 set -euo pipefail
 
-INSTALL_DIR="${HOME}/fprime-soak"
+INSTALL_DIR="${HOME}/fprime-soak-${DEPLOYMENT_NAME}"
 TEMPLATES="${ACTION_PATH}/templates"
+SERVICE_NAME="fprime-soak-fsw-${DEPLOYMENT_NAME}"
 
 render() {
   sed -e "s#__INSTALL_DIR__#${INSTALL_DIR}#g" \
@@ -14,17 +20,19 @@ render() {
       -e "s#__FSW_ARGS__#${FSW_ARGS}#g" "$1"
 }
 
-# Setup and start FSW
-sudo systemctl disable --now "fprime-soak-fsw" 2>/dev/null || true
+sudo systemctl disable --now "${SERVICE_NAME}" 2>/dev/null || true
 render "${TEMPLATES}/fsw.service.template" \
-| sudo tee "/etc/systemd/system/fprime-soak-fsw.service" >/dev/null
+  | sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" >/dev/null
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now fprime-soak-fsw
+sudo systemctl enable --now "${SERVICE_NAME}"
 
-# Verify FSW started
-sudo systemctl is-active --quiet "fprime-soak-fsw" && { echo "[INFO] fprime-soak-fsw is active"; exit 0; }
-echo "::error::fprime-soak-fsw failed to start"
-sudo systemctl status "fprime-soak-fsw" --no-pager -l || true
-sudo journalctl -u "fprime-soak-fsw" --no-pager -n 40 || true
+if sudo systemctl is-active --quiet "${SERVICE_NAME}"; then
+  echo "[INFO] ${SERVICE_NAME} is active"
+  exit 0
+fi
+
+echo "::error::${SERVICE_NAME} failed to start"
+sudo systemctl status "${SERVICE_NAME}" --no-pager -l || true
+sudo journalctl -u "${SERVICE_NAME}" --no-pager -n 40 || true
 exit 1
