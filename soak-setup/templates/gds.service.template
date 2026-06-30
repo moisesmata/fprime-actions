@@ -1,7 +1,6 @@
 [Unit]
 Description=F' soak-test GDS
-After=network.target fprime-soak-fsw.service
-Wants=fprime-soak-fsw.service
+After=network.target
 
 [Service]
 Type=simple

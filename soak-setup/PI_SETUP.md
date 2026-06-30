@@ -21,49 +21,31 @@ This guide walks you through configuring two Raspberry Pis for the remote FSW de
 
 ### 1. Configure Static IP for Ethernet Interface
 
-Find your ethernet interface name:
+Use NetworkManager's text UI for easy configuration:
+
 ```bash
-ip link show
-# Look for something like eth0, enp0s3, or end0
+sudo nmtui
 ```
 
-Edit netplan configuration (Ubuntu) or dhcpcd.conf (Raspberry Pi OS):
+In the `nmtui` interface:
+1. Select **"Edit a connection"**
+2. Select your ethernet interface (e.g., `eth0`, `Wired connection 1`)
+3. Press Enter to edit
+4. Configure the following:
+   - **IPv4 CONFIGURATION**: Change from `<Automatic>` to `<Manual>`
+   - Select **"Show"** next to IPv4 CONFIGURATION
+   - **Addresses**: Add `192.168.100.1/24` (or `192.168.10.1/24` to match your setup)
+   - **Gateway**: Leave empty (direct connection)
+   - **DNS servers**: Leave empty or use your existing DNS
+5. Select **"OK"** at the bottom
+6. Select **"Back"**
+7. Select **"Activate a connection"**
+8. Deactivate and reactivate the connection
 
-**For Ubuntu (netplan):**
+Verify the configuration:
 ```bash
-sudo nano /etc/netplan/50-cloud-init.yaml
-```
-
-Add ethernet configuration:
-```yaml
-network:
-  version: 2
-  ethernets:
-    eth0:  # Replace with your interface name
-      addresses:
-        - 192.168.100.1/24  # GDS Pi static IP
-      dhcp4: no
-```
-
-Apply:
-```bash
-sudo netplan apply
-```
-
-**For Raspberry Pi OS:**
-```bash
-sudo nano /etc/dhcpcd.conf
-```
-
-Add at the end:
-```
-interface eth0
-static ip_address=192.168.100.1/24
-```
-
-Restart networking:
-```bash
-sudo systemctl restart dhcpcd
+ip addr show
+# You should see 192.168.100.1 on your ethernet interface
 ```
 
 ### 2. Install Dependencies
@@ -110,45 +92,31 @@ sudo usermod -aG sudo pi
 
 ### 2. Configure Static IP for Ethernet Interface
 
-Find your ethernet interface:
+Use NetworkManager's text UI for easy configuration:
+
 ```bash
-ip link show
+sudo nmtui
 ```
 
-**For Ubuntu (netplan):**
+In the `nmtui` interface:
+1. Select **"Edit a connection"**
+2. Select your ethernet interface (e.g., `eth0`, `Wired connection 1`)
+3. Press Enter to edit
+4. Configure the following:
+   - **IPv4 CONFIGURATION**: Change from `<Automatic>` to `<Manual>`
+   - Select **"Show"** next to IPv4 CONFIGURATION
+   - **Addresses**: Add `192.168.100.2/24` (or `192.168.10.2/24` to match your setup)
+   - **Gateway**: Leave empty (direct connection)
+   - **DNS servers**: Leave empty or use your existing DNS
+5. Select **"OK"** at the bottom
+6. Select **"Back"**
+7. Select **"Activate a connection"**
+8. Deactivate and reactivate the connection
+
+Verify the configuration:
 ```bash
-sudo nano /etc/netplan/50-cloud-init.yaml
-```
-
-```yaml
-network:
-  version: 2
-  ethernets:
-    eth0:  # Replace with your interface name
-      addresses:
-        - 192.168.100.2/24  # FSW Pi static IP
-      dhcp4: no
-```
-
-Apply:
-```bash
-sudo netplan apply
-```
-
-**For Raspberry Pi OS:**
-```bash
-sudo nano /etc/dhcpcd.conf
-```
-
-Add:
-```
-interface eth0
-static ip_address=192.168.100.2/24
-```
-
-Restart:
-```bash
-sudo systemctl restart dhcpcd
+ip addr show
+# You should see 192.168.100.2 on your ethernet interface
 ```
 
 ### 3. Enable SSH
