@@ -1,0 +1,26 @@
+name: "F´ Soak Summary"
+description: "Read the persistent soak log and print a formatted summary of every event and alert since the soak started."
+
+inputs:
+  deployment-name:
+    description: "Deployment name (must match soak-setup deployment-name)."
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Summarize soak log"
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        DEPLOYMENT_NAME: ${{ inputs.deployment-name }}
+      run: |
+        INSTALL_DIR="${HOME}/fprime-soak-${DEPLOYMENT_NAME}"
+        SOAK_LOG="${INSTALL_DIR}/soak.log"
+
+        if [ ! -f "${SOAK_LOG}" ]; then
+          echo "::error::Persistent soak log not found: ${SOAK_LOG}"
+          exit 1
+        fi
+
+        python3 "${ACTION_PATH}/scripts/soak_summary.py" --soak-log "${SOAK_LOG}"
