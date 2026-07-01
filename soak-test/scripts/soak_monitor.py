@@ -118,17 +118,6 @@ def _parse_iso(ts: str) -> Optional[datetime]:
         return None
 
 
-def _ordinal_suffix(day: int) -> str:
-    if 11 <= day <= 13:
-        return "th"
-    return {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
-
-
-def _format_soak_start(dt: datetime) -> str:
-    """Format the soak start time as 'Thursday June 25th 2026 12:24:16 PM'."""
-    return dt.strftime(f"%A %B {dt.day}{_ordinal_suffix(dt.day)} %Y %I:%M:%S %p")
-
-
 def _format_duration(seconds: float) -> str:
     """Compact human-readable duration (e.g. '2d 4h', '36m 12s')."""
     s = max(0, int(seconds))
@@ -217,22 +206,20 @@ def _read_database(path: Path) -> Tuple[
             soak_start = _parse_iso(header.group(1).strip()) or soak_start
             continue
         parts = line.split("\t")
-        if not parts:
-            continue
-        tag = parts[0]
+        tag = parts[0] if parts else ""
         if tag == "T" and len(parts) >= 4:
             try:
                 history.setdefault(parts[2], []).append((float(parts[3]), parts[1]))
             except ValueError:
                 pass
+        elif tag == "A":
+            old_alerts += 1
         elif tag == "E" and len(parts) >= 5:
             old_alerts += 1
             if parts[2] == "FATAL":
                 when = _parse_iso(parts[1])
                 if when is not None and (latest_fatal is None or when > latest_fatal):
                     latest_fatal = when
-        elif tag == "A":
-            old_alerts += 1
     return history, soak_start, latest_fatal, old_alerts
 
 
@@ -293,7 +280,6 @@ def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
 
     # Walk this window's channels: trend channels drain into history + DB,
     # threshold channels feed the threshold-table rows.
-    threshold_channels_seen: set = set()
     for channel_name, samples in results.channels.items():
         suffix = channel_name.rsplit(".", 1)[-1]
 
@@ -305,35 +291,26 @@ def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
         rule = _THRESHOLD_BY_SUFFIX.get(suffix)
         if rule is None:
             continue
-        threshold_channels_seen.add(channel_name)
         _, predicate, label, direction, unit = rule
+        if not samples:
+            results.threshold_rows.append(
+                ("WAITING", channel_name, "n/a", "n/a", "no samples this window"))
+            continue
         breaches = [(v, t) for v, t in samples if predicate(v)]
+        picker = max if direction == "max" else min
+        pool = breaches or samples
+        extreme_value, extreme_ts = picker(pool, key=lambda b: b[0])
+        value_str = _format_threshold_value(suffix, extreme_value, unit)
+        count = len(pool)
+        verb = "breached" if breaches else "observed"
+        note = f"{count} sample{'s' if count != 1 else ''} {verb}"
+        status = "ALERT" if breaches else "OK"
+        results.threshold_rows.append(
+            (status, channel_name, value_str, extreme_ts, note))
         if breaches:
-            picker = max if direction == "max" else min
-            extreme_value, extreme_ts = picker(breaches, key=lambda b: b[0])
-            value_str = _format_threshold_value(suffix, extreme_value, unit)
-            count = len(breaches)
-            results.threshold_rows.append((
-                "ALERT", channel_name, value_str, extreme_ts,
-                f"{count} sample{'s' if count != 1 else ''} breached",
-            ))
-            msg = (f"{label}: {channel_name}: peak {value_str} at {extreme_ts} "
-                   f"({count} sample{'s' if count != 1 else ''} breached)")
+            msg = f"{label}: {channel_name}: peak {value_str} at {extreme_ts} ({note})"
             results.emit_alert(TELEMETRY_WARNING, msg, extreme_ts,
                 f"A\t{extreme_ts}\t{TELEMETRY_WARNING}\t{msg}")
-        elif samples:
-            # No breach: report the most extreme observed value for visibility.
-            picker = max if direction == "max" else min
-            extreme_value, extreme_ts = picker(samples, key=lambda s: s[0])
-            results.threshold_rows.append((
-                "OK", channel_name,
-                _format_threshold_value(suffix, extreme_value, unit),
-                extreme_ts, f"{len(samples)} sample{'s' if len(samples) != 1 else ''} observed",
-            ))
-        else:
-            results.threshold_rows.append((
-                "WAITING", channel_name, "n/a", "n/a", "no samples this window",
-            ))
 
     # Trend analysis over the full accumulated history. Every trend
     # channel that has at least one sample produces a row; insufficient-
@@ -365,11 +342,9 @@ def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
         n = len(ys)
         time_span_str = _format_duration(xs[-1]) if n >= 2 else "n/a"
         if n < MIN_POINTS_FOR_TREND or (n >= 2 and xs[-1] == xs[0]):
-            results.trend_rows.append((
-                "WAITING", channel_name, "n/a", "n/a", "n/a",
-                "n/a", "n/a", "n/a",
-                time_span_str if n >= 2 else f"{n}/{MIN_POINTS_FOR_TREND} samples",
-            ))
+            note = time_span_str if n >= 2 else f"{n}/{MIN_POINTS_FOR_TREND} samples"
+            results.trend_rows.append(
+                ("WAITING", channel_name) + ("n/a",) * 6 + (note,))
             continue
 
         slope, intercept, r_squared, sigma = _linear_regression(xs, ys)
@@ -441,7 +416,7 @@ def _print_summary(results: Results, soak_start: Optional[datetime],
     total_samples = sum(len(samples) for samples in results.channels.values())
     print("")
     if soak_start is not None:
-        print(f"Soak Started:             {_format_soak_start(soak_start)}")
+        print(f"Soak Started:             {soak_start.strftime('%A %B %d %Y %I:%M:%S %p')}")
     print(f"Events Decoded:           {len(results.events)}")
     print(f"Channel Samples Decoded:  {total_samples}")
     print(f"Alerts (new):             {len(results.alerts)}")

@@ -7,9 +7,11 @@ Type=simple
 User=__SERVICE_USER__
 WorkingDirectory=__INSTALL_DIR__
 ExecStart=__INSTALL_DIR__/venv/bin/fprime-gds --no-app --logs __INSTALL_DIR__/gds-logs --dictionary __DICT_PATH__ __GDS_ARGS__
-Restart=no
+Restart=on-failure
+RestartSec=5
 StandardOutput=journal
 StandardError=journal
+__EXTRA_SERVICE__
 
 [Install]
 WantedBy=multi-user.target
