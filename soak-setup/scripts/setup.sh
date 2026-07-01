@@ -19,7 +19,6 @@ INSTALL_DIR="${HOME}/fprime-soak-${DEPLOYMENT_NAME}"
 TEMPLATES="${ACTION_PATH}/templates"
 SERVICE_NAME="fprime-soak-gds-${DEPLOYMENT_NAME}"
 ZMQ_TRANSPORT="--zmq-transport ipc:///tmp/fprime-server-${DEPLOYMENT_NAME}-in ipc:///tmp/fprime-server-${DEPLOYMENT_NAME}-out"
-EXTRA_SERVICE=""
 
 rm -rf "${INSTALL_DIR}"
 mkdir -p "${INSTALL_DIR}"/{bin,dict,gds-logs,ComLoggerFiles,test}
@@ -45,13 +44,16 @@ case "${PLATFORM}" in
     GDS_ARGS="--communication-selection ip --ip-address ${FSW_IP} --ip-port ${FSW_PORT:-50000} --ip-client ${ZMQ_TRANSPORT} ${GDS_ARGS:-}"
     ;;
   pico2)
-    # fprime-ci already extracted archive.tar.gz to ./build-artifacts/
+    # fprime-ci already extracted archive.tar.gz to ./build-artifacts/;
+    # the target repo (with integration tests) is checked out at ./
     echo "[INFO] Staging Pico 2 artifacts from fprime-ci build"
     DICT_FILE=$(find ./build-artifacts -name "*TopologyDictionary.json" | head -n 1)
     cp "${DICT_FILE}" "${INSTALL_DIR}/dict/"
-    INT_TEST_DIR=$(find . -path ./lib -prune -o -type d -name "int" -print 2>/dev/null | grep -v "^./build-artifacts" | head -n 1)
+    INT_TEST_DIR=$(find . -path ./lib -prune -o -path ./build-artifacts -prune -o -type d -name "int" -print 2>/dev/null | head -n 1)
+    if [ -n "${INT_TEST_DIR}" ] && [ -d "${INT_TEST_DIR}" ]; then
+      cp -r "${INT_TEST_DIR}"/. "${INSTALL_DIR}/test/"
+    fi
     GDS_ARGS="--communication-selection uart --uart-device ${FSW_DEVICE:-/dev/pico2} --uart-baud 115200 --uart-skip-port-check ${ZMQ_TRANSPORT} ${GDS_ARGS:-}"
-    EXTRA_SERVICE="SupplementaryGroups=dialout"
     ;;
   *)
     echo "::error::Unknown platform: ${PLATFORM}"
@@ -71,7 +73,6 @@ sed -e "s#__INSTALL_DIR__#${INSTALL_DIR}#g" \
     -e "s#__SERVICE_USER__#$(whoami)#g" \
     -e "s#__GDS_ARGS__#${GDS_ARGS}#g" \
     -e "s#__DICT_PATH__#${DICT_PATH}#g" \
-    -e "s#__EXTRA_SERVICE__#${EXTRA_SERVICE}#g" \
     "${TEMPLATES}/gds.service.template" \
   | sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" >/dev/null
 

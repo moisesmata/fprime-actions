@@ -45,8 +45,9 @@ FSW_ALERT_SEVERITIES = ("FATAL", "WARNING_HI", "WARNING_LO")
 TELEMETRY_WARNING = "Telemetry Warning"
 FAILING_SEVERITIES = FSW_ALERT_SEVERITIES + (TELEMETRY_WARNING,)
 
-# Trend-tracked channel suffixes. Per-suffix trend rules live in the
-# if/elif chain in analyze(); threshold rules live in _THRESHOLD_RULES.
+# Trend-tracked channel suffixes. MEMORY_USED and CurrBuffs get leak-alert
+# checks in analyze(); NON_VOLATILE_FREE is only trended (and threshold-checked
+# below). Threshold rules live in THRESHOLD_RULES.
 TREND_SUFFIXES = ("MEMORY_USED", "NON_VOLATILE_FREE", "CurrBuffs")
 
 # SystemResources telemetry is in KB. Auto-pick MB or GB for display.
@@ -55,10 +56,10 @@ KB_PER_MB = 1024
 KB_PER_GB = 1024 * 1024
 
 # Matches the soak.log header line written by setup.sh.
-_SOAK_HEADER_RE = re.compile(r"^# SOAK STARTED (.+)$")
+SOAK_HEADER_RE = re.compile(r"^# SOAK STARTED (.+)$")
 
 
-def _format_value(suffix: str, value: float) -> str:
+def format_value(suffix: str, value: float) -> str:
     """Channel value: auto-scaled MB/GB for KB channels, :g elsewhere."""
     if suffix not in MEMORY_SUFFIXES:
         return f"{value:g}"
@@ -67,7 +68,7 @@ def _format_value(suffix: str, value: float) -> str:
     return f"{value / KB_PER_MB:.2f} MB"
 
 
-def _linear_regression(xs: List[float], ys: List[float]) -> Tuple[float, float, float, float]:
+def linear_regression(xs: List[float], ys: List[float]) -> Tuple[float, float, float, float]:
     """Least-squares fit y = slope * x + intercept over the given (x, y) lists.
 
     Returns (slope, intercept, r², residual_σ). r² is 0 when constant;
@@ -91,14 +92,14 @@ def _linear_regression(xs: List[float], ys: List[float]) -> Tuple[float, float, 
     return slope, intercept, r_squared, sigma
 
 
-def _parse_iso(ts: str) -> Optional[datetime]:
+def parse_iso(ts: str) -> Optional[datetime]:
     try:
         return datetime.fromisoformat(ts)
     except ValueError:
         return None
 
 
-def _format_duration(seconds: float) -> str:
+def format_duration(seconds: float) -> str:
     """Compact human-readable duration (e.g. '2d 4h', '36m 12s')."""
     s = max(0, int(seconds))
     d, s = divmod(s, 86400)
@@ -113,11 +114,11 @@ def _format_duration(seconds: float) -> str:
     return f"{s}s"
 
 
-def _format_elapsed(timestamp: str, soak_start: Optional[datetime]) -> str:
+def format_elapsed(timestamp: str, soak_start: Optional[datetime]) -> str:
     """'(X weeks, Y days, Z hours, W minutes since soak start)' or ''."""
     if soak_start is None or not timestamp:
         return ""
-    when = _parse_iso(timestamp)
+    when = parse_iso(timestamp)
     if when is None:
         return ""
     delta = when - soak_start
@@ -163,7 +164,7 @@ class Results:
         self.log_records.append(log_row)
 
 
-def _read_soak_log(path: Path) -> Tuple[
+def read_soak_log(path: Path) -> Tuple[
     Dict[str, List[Tuple[float, str]]], Optional[datetime], Optional[datetime], int
 ]:
     """Walk the persistent soak log. Return:
@@ -179,9 +180,9 @@ def _read_soak_log(path: Path) -> Tuple[
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line:
             continue
-        header = _SOAK_HEADER_RE.match(line)
+        header = SOAK_HEADER_RE.match(line)
         if header:
-            soak_start = _parse_iso(header.group(1).strip()) or soak_start
+            soak_start = parse_iso(header.group(1).strip()) or soak_start
             continue
         parts = line.split("\t")
         tag = parts[0] if parts else ""
@@ -195,13 +196,13 @@ def _read_soak_log(path: Path) -> Tuple[
         elif tag == "E" and len(parts) >= 5:
             old_alerts += 1
             if parts[2] == "FATAL":
-                when = _parse_iso(parts[1])
+                when = parse_iso(parts[1])
                 if when is not None and (latest_fatal is None or when > latest_fatal):
                     latest_fatal = when
     return history, soak_start, latest_fatal, old_alerts
 
 
-def _truncate_gds_logs(gds_logs: Optional[Path]) -> None:
+def truncate_gds_logs(gds_logs: Optional[Path]) -> None:
     """Reset event.log and channel.log to size 0. GDS's append-mode handle
     keeps writing past the truncation point with no NUL gap."""
     if gds_logs is None or not gds_logs.is_dir():
@@ -215,21 +216,21 @@ def _truncate_gds_logs(gds_logs: Optional[Path]) -> None:
 
 # Per-sample threshold rules: (suffix, predicate, label, direction, unit).
 # direction: "max" means worse = higher; "min" means worse = lower.
-_THRESHOLD_RULES = (
+THRESHOLD_RULES = (
     ("CPU",        lambda v: v > HIGH_CPU_PERCENT,           "High average CPU usage",   "max", "%"),
     ("NoBuffs",    lambda v: v > 0,                          "Buffer allocation failure", "max", ""),
     ("EmptyBuffs", lambda v: v > 0,                          "Empty buffer returned",    "max", ""),
     ("NON_VOLATILE_FREE", lambda v: v < NON_VOLATILE_FREE_FLOOR_KB,
                                                               "Storage depletion floor",  "min", ""),
 )
-_THRESHOLD_BY_SUFFIX = {rule[0]: rule for rule in _THRESHOLD_RULES}
+THRESHOLD_BY_SUFFIX = {rule[0]: rule for rule in THRESHOLD_RULES}
 
 
-def _format_threshold_value(suffix: str, value: float, unit: str) -> str:
+def format_threshold_value(suffix: str, value: float, unit: str) -> str:
     """Threshold value display. Memory-style suffixes get KB->MB/GB scaling;
     everything else gets a bare :g, optionally with a unit suffix (e.g. %)."""
     if suffix in MEMORY_SUFFIXES:
-        return _format_value(suffix, value)
+        return format_value(suffix, value)
     return f"{value:g}{unit}"
 
 
@@ -250,7 +251,7 @@ def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
                 f"E\t{timestamp}\t{severity}\t{event_name}\t{body}",
             )
             if severity == "FATAL":
-                when = _parse_iso(timestamp)
+                when = parse_iso(timestamp)
                 if when is not None and (window_fatal is None or when > window_fatal):
                     window_fatal = when
 
@@ -264,7 +265,7 @@ def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
                 history.setdefault(channel_name, []).append((value, ts))
                 results.log_records.append(f"T\t{ts}\t{channel_name}\t{value:g}")
 
-        rule = _THRESHOLD_BY_SUFFIX.get(suffix)
+        rule = THRESHOLD_BY_SUFFIX.get(suffix)
         if rule is None:
             continue
         _, predicate, label, direction, unit = rule
@@ -276,7 +277,7 @@ def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
         picker = max if direction == "max" else min
         pool = breaches or samples
         extreme_value, extreme_ts = picker(pool, key=lambda b: b[0])
-        value_str = _format_threshold_value(suffix, extreme_value, unit)
+        value_str = format_threshold_value(suffix, extreme_value, unit)
         count = len(pool)
         verb = "breached" if breaches else "observed"
         note = f"{count} sample{'s' if count != 1 else ''} {verb}"
@@ -301,30 +302,30 @@ def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
         # step changes in counters don't drown the regression.
         if window_fatal is not None:
             samples = [(v, t) for v, t in samples
-                       if (_parse_iso(t) or window_fatal) >= window_fatal]
+                       if (parse_iso(t) or window_fatal) >= window_fatal]
 
         # Build (xs, ys) in seconds-since-first-sample. Drop unparseable
         # timestamps but keep the row even if too few samples remain.
         xs: List[float] = []
         ys: List[float] = []
-        first_dt = _parse_iso(samples[0][1]) if samples else None
+        first_dt = parse_iso(samples[0][1]) if samples else None
         if first_dt is not None:
             for v, t in samples:
-                dt = _parse_iso(t)
+                dt = parse_iso(t)
                 if dt is None:
                     continue
                 xs.append((dt - first_dt).total_seconds())
                 ys.append(v)
 
         n = len(ys)
-        time_span_str = _format_duration(xs[-1]) if n >= 2 else "n/a"
+        time_span_str = format_duration(xs[-1]) if n >= 2 else "n/a"
         if n < MIN_POINTS_FOR_TREND or (n >= 2 and xs[-1] == xs[0]):
             note = time_span_str if n >= 2 else f"{n}/{MIN_POINTS_FOR_TREND} samples"
             results.trend_rows.append(
                 ("WAITING", channel_name) + ("n/a",) * 6 + (note,))
             continue
 
-        slope, intercept, r_squared, sigma = _linear_regression(xs, ys)
+        slope, intercept, r_squared, sigma = linear_regression(xs, ys)
         slope_per_hour = slope * 3600.0
         fitted_first = intercept
         fitted_last = intercept + slope * xs[-1]
@@ -351,7 +352,7 @@ def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
             status = "ALERT"
             ts = samples[-1][1]
             msg = (f"{prefix}: {channel_name}: "
-                   f"{_format_value(suffix, ys[0])} -> {_format_value(suffix, ys[-1])} "
+                   f"{format_value(suffix, ys[0])} -> {format_value(suffix, ys[-1])} "
                    f"(fit: {percent_change:+.1f}% over {n} samples, "
                    f"slope={slope_str}, R-squared={r_squared:.2f}, sigma={sigma_str})")
             results.emit_alert(TELEMETRY_WARNING, msg, ts,
@@ -359,13 +360,13 @@ def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
 
         results.trend_rows.append((
             status, channel_name,
-            _format_value(suffix, ys[0]), _format_value(suffix, ys[-1]),
+            format_value(suffix, ys[0]), format_value(suffix, ys[-1]),
             f"{percent_change:+.1f}%", slope_str, f"{r_squared:.2f}", sigma_str,
             time_span_str,
         ))
 
 
-def _print_table(headers: Tuple[str, ...], rows: List[Tuple[str, ...]],
+def print_table(headers: Tuple[str, ...], rows: List[Tuple[str, ...]],
                  indent: str = "  ") -> None:
     """Render rows as an aligned text table with a header underline."""
     if not rows:
@@ -379,16 +380,16 @@ def _print_table(headers: Tuple[str, ...], rows: List[Tuple[str, ...]],
             print(f"{indent}{sep.join('-' * w for w in widths)}")
 
 
-_TREND_HEADERS = (
+TREND_HEADERS = (
     "STATUS", "CHANNEL", "START", "END",
     "PERCENTAGE CHANGE", "SLOPE", "R-SQUARED", "SIGMA", "TIME SPAN",
 )
-_THRESHOLD_HEADERS = (
+THRESHOLD_HEADERS = (
     "STATUS", "CHANNEL", "EXTREME VALUE", "TIMESTAMP", "NOTES",
 )
 
 
-def _print_summary(results: Results, soak_start: Optional[datetime],
+def print_summary(results: Results, soak_start: Optional[datetime],
                    old_alerts: int) -> None:
     total_samples = sum(len(samples) for samples in results.channels.values())
     print("")
@@ -410,20 +411,20 @@ def _print_summary(results: Results, soak_start: Optional[datetime],
         print(" (Least squares fit done on telemetry since the last boot sequence)")
         # Bracket the STATUS cell only for visual punch.
         formatted = [(f"[{r[0]}]",) + r[1:] for r in results.trend_rows]
-        _print_table(_TREND_HEADERS, formatted, indent="  ")
+        print_table(TREND_HEADERS, formatted, indent="  ")
 
     if results.threshold_rows:
         print("")
         print(" Threshold checks:")
         formatted = [(f"[{r[0]}]",) + r[1:] for r in results.threshold_rows]
-        _print_table(_THRESHOLD_HEADERS, formatted, indent="  ")
+        print_table(THRESHOLD_HEADERS, formatted, indent="  ")
 
     if results.alerts:
         print("")
         print(" Alerts:")
         for severity, message, timestamp in results.alerts:
             ts = f" [{timestamp}]" if timestamp else ""
-            print(f"  {severity} - {message}{ts}{_format_elapsed(timestamp, soak_start)}")
+            print(f"  {severity} - {message}{ts}{format_elapsed(timestamp, soak_start)}")
         print("")
 
     print("")
@@ -465,16 +466,16 @@ def main():
     latest_fatal: Optional[datetime] = None
     old_alerts = 0
     if args.soak_log is not None:
-        history, soak_start, latest_fatal, old_alerts = _read_soak_log(args.soak_log)
+        history, soak_start, latest_fatal, old_alerts = read_soak_log(args.soak_log)
 
     analyze(results, history, latest_fatal)
 
     if args.soak_log is not None and results.log_records:
         with args.soak_log.open("a", encoding="utf-8") as fh:
             fh.write("\n".join(results.log_records) + "\n")
-    _truncate_gds_logs(args.gds_logs)
+    truncate_gds_logs(args.gds_logs)
 
-    _print_summary(results, soak_start, old_alerts)
+    print_summary(results, soak_start, old_alerts)
     sys.exit(1 if any(s in FAILING_SEVERITIES for s, _, _ in results.alerts) else 0)
 
 
