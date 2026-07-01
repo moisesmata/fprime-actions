@@ -4,7 +4,8 @@
 
 set -uo pipefail
 
-INSTALL_DIR="${HOME}/fprime-soak"
+# Namespace by deployment name
+INSTALL_DIR="${HOME}/fprime-soak-${DEPLOYMENT_NAME}"
 DICT=$(ls "${INSTALL_DIR}"/dict/*TopologyDictionary.json)
 
 # Analyze accumulated telemetry. Checks GDS text logs first
@@ -12,16 +13,24 @@ echo "[INFO] Analyzing soak telemetry"
 "${INSTALL_DIR}/venv/bin/python" "${ACTION_PATH}/scripts/soak_monitor.py" \
   --dictionary "${DICT}" \
   --gds-logs "${INSTALL_DIR}/gds-logs" \
-  --com-logs "${INSTALL_DIR}/ComLoggerFiles"
+  --com-logs "${INSTALL_DIR}/ComLoggerFiles" \
+  --soak-database "${INSTALL_DIR}/soak-database.log"
 monitor_rc=$?
 
 # Run the deployment's integration tests.
 echo "[INFO] Running integration tests"
 cd "${INSTALL_DIR}/test"
 . "${INSTALL_DIR}/venv/bin/activate"
+
+# Use namespaced ZMQ sockets so tests connect to the correct GDS
+ZMQ_IN="ipc:///tmp/fprime-server-${DEPLOYMENT_NAME}-in"
+ZMQ_OUT="ipc:///tmp/fprime-server-${DEPLOYMENT_NAME}-out"
+
 # Override pytest's default python_files=test_*.py so deployments that name
 # tests <something>_integration_tests.py (e.g. led-blinker) still get collected.
-pytest -o python_files='*.py' --dictionary "${DICT}"
+pytest -o python_files='*.py' \
+  --dictionary "${DICT}" \
+  --zmq-transport "${ZMQ_IN}" "${ZMQ_OUT}"
 pytest_rc=$?
 
 # Exit with proper return value

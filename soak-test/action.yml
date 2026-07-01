@@ -1,5 +1,9 @@
 name: "F´ Soak Test"
 description: "Analyze accumulated soak telemetry for FATALs/degradation, then run integration tests against the persistent GDS"
+inputs:
+  deployment-name:
+    description: "Deployment name (must match soak-setup deployment-name for correct namespacing)"
+    required: true
 runs:
   using: "composite"
   steps:
@@ -7,4 +11,5 @@ runs:
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
+        DEPLOYMENT_NAME: ${{ inputs.deployment-name }}
       run: ${{ github.action_path }}/scripts/test.sh

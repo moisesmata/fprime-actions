@@ -1,12 +1,12 @@
 [Unit]
-Description=F' soak-test GDS
+Description=F' soak-test flight software (remote)
 After=network.target
 
 [Service]
 Type=simple
 User=__SERVICE_USER__
 WorkingDirectory=__INSTALL_DIR__
-ExecStart=__INSTALL_DIR__/venv/bin/fprime-gds --no-app --logs __INSTALL_DIR__/gds-logs --dictionary __DICT_PATH__ __GDS_ARGS__
+ExecStart=__INSTALL_DIR__/bin/fsw __FSW_ARGS__
 Restart=no
 StandardOutput=journal
 StandardError=journal
