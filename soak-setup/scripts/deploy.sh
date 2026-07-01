@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # Platform-dispatched deploy step.
-#   linux         : render FSW unit locally, start it.
-#   linux-remote  : scp binary + rendered unit to the FSW Pi over SSH, start it.
+#   linux         : start FSW locally
+#   linux-remote  : scp binary + rendered service to the FSW Pi over SSH, start it.
 #                   Remote user is 'fprime' with passwordless sudo for systemctl.
 #   pico2         : fprime-ci already flashed the board; verify the serial
 #                   device is back.

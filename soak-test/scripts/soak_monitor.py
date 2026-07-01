@@ -1,15 +1,6 @@
 #!/usr/bin/env python3
 """F´ Soak Test Monitor.
 
-Each soak-test run reads GDS channel.log + event.log (which contain only
-samples since the last cron tick), appends a structured record for
-everything we care about to soak-database.log, and truncates the GDS
-logs so the next run starts with an empty window.
-
-Trend analysis runs against the FULL soak-database history of telemetry
-rows (T records), so slow leaks over many hours are still visible even
-though each cron only sees ~30 minutes of fresh samples.
-
 Channels we analyze (units from Svc/SystemResources.fpp and
 Svc/BufferManager/Telemetry.fppi):
   SystemResources:
@@ -22,23 +13,12 @@ Svc/BufferManager/Telemetry.fppi):
     NoBuffs    (U32) - allocation failures; >0 alerts.
     EmptyBuffs (U32) - null/zero-size returns; >0 alerts.
 
-soak-database.log row formats (tab-separated, append-only):
+soak.log row formats (tab-separated, append-only persistent soak log):
 
   # SOAK STARTED <iso>                       header line (written by setup.sh)
   E\t<iso>\t<severity>\t<name>\t<body>      FSW event we alerted on
   A\t<iso>\t<severity>\t<message>           monitor-derived alert (threshold or trend)
   T\t<iso>\t<channel>\t<value>              raw trend-channel sample
-
-Trend analysis reuses T rows; threshold and event alerts use the fresh
-GDS logs only. Threshold breaches are coalesced to ONE alert per channel
-per run (with the extreme value + timestamp), so the printed Alerts
-list mirrors the printed Threshold checks list one-to-one.
-
-Restart protection: if the database contains any E row at FATAL
-severity, trend analysis ignores all T rows (and current-window trend
-samples) older than the latest FATAL timestamp. Restarts often produce
-huge step changes in memory/buffer counters that would otherwise drown
-the regression. T rows are still persisted for the historical record.
 """
 
 import math
@@ -65,14 +45,17 @@ FSW_ALERT_SEVERITIES = ("FATAL", "WARNING_HI", "WARNING_LO")
 TELEMETRY_WARNING = "Telemetry Warning"
 FAILING_SEVERITIES = FSW_ALERT_SEVERITIES + (TELEMETRY_WARNING,)
 
-# Trend-tracked channel suffixes. Per-sample thresholds and trend rules
-# are hardcoded into the if/elif chains in analyze().
+# Trend-tracked channel suffixes. Per-suffix trend rules live in the
+# if/elif chain in analyze(); threshold rules live in _THRESHOLD_RULES.
 TREND_SUFFIXES = ("MEMORY_USED", "NON_VOLATILE_FREE", "CurrBuffs")
 
 # SystemResources telemetry is in KB. Auto-pick MB or GB for display.
 MEMORY_SUFFIXES = ("MEMORY_USED", "MEMORY_TOTAL", "NON_VOLATILE_TOTAL", "NON_VOLATILE_FREE")
 KB_PER_MB = 1024
 KB_PER_GB = 1024 * 1024
+
+# Matches the soak.log header line written by setup.sh.
+_SOAK_HEADER_RE = re.compile(r"^# SOAK STARTED (.+)$")
 
 
 def _format_value(suffix: str, value: float) -> str:
@@ -106,9 +89,6 @@ def _linear_regression(xs: List[float], ys: List[float]) -> Tuple[float, float, 
         ss_res = sum((y - (intercept + slope * x)) ** 2 for x, y in zip(xs, ys))
         sigma = math.sqrt(ss_res / (n - 2))
     return slope, intercept, r_squared, sigma
-
-
-_SOAK_HEADER_RE = re.compile(r"^# SOAK STARTED (.+)$")
 
 
 def _parse_iso(ts: str) -> Optional[datetime]:
@@ -156,21 +136,19 @@ def _format_elapsed(timestamp: str, soak_start: Optional[datetime]) -> str:
 
 class Results:
     """In-memory state for one soak-monitor run: parser output, derived
-    analysis, and the database records we will append."""
+    analysis, and the persistent-log rows we will append."""
 
     def __init__(self):
         self.channels: Dict[str, List[Tuple[float, str]]] = {}      # name -> [(value, ts)]
         self.events: List[Tuple[str, str, str, str]] = []           # [(severity, name, body, ts)]
         self.alerts: List[Tuple[str, str, str]] = []                # [(severity, msg, ts)]
-        # Trend-table rows: every observed trend-tracked channel produces
-        # a row, breached or not. Cells are pre-stringified for the renderer.
+        # Trend-table rows: every observed trend-tracked channel produces a row
         # (status, channel, start, end, pct_str, slope_str, r2_str, sigma_str, time_span_str)
         self.trend_rows: List[Tuple[str, str, str, str, str, str, str, str, str]] = []
-        # Threshold-check rows: every observed threshold-tracked channel
-        # produces a row, breached or not.
-        # (status, channel, extreme_value_str, extreme_timestamp_str, breach_count_str)
+        # Threshold-check rows: every observed threshold-tracked channel produces a row
+        # (status, channel, extreme_value_str, extreme_timestamp_str, note_str)
         self.threshold_rows: List[Tuple[str, str, str, str, str]] = []
-        self.db_records: List[str] = []                             # rows to append to soak-database.log
+        self.log_records: List[str] = []                            # rows to append to soak.log
 
     def add_event(self, name: str, severity: str, body: str, ts: str = ""):
         self.events.append((severity.removeprefix("EventSeverity."), name, body, ts))
@@ -179,16 +157,16 @@ class Results:
         self.channels.setdefault(name, []).append((value, ts))
 
     def emit_alert(self, severity: str, message: str, timestamp: str,
-                   db_row: str) -> None:
-        """Record an alert and the matching database row in one call."""
+                   log_row: str) -> None:
+        """Record an alert and the matching soak.log row in one call."""
         self.alerts.append((severity, message, timestamp))
-        self.db_records.append(db_row)
+        self.log_records.append(log_row)
 
 
-def _read_database(path: Path) -> Tuple[
+def _read_soak_log(path: Path) -> Tuple[
     Dict[str, List[Tuple[float, str]]], Optional[datetime], Optional[datetime], int
 ]:
-    """Walk the soak database. Return:
+    """Walk the persistent soak log. Return:
         (T history, soak_start, latest_fatal_ts, old_alert_count)
     old_alert_count is the count of A + E rows already on disk, used to
     show "Alerts (old)" in the run summary."""
@@ -235,10 +213,8 @@ def _truncate_gds_logs(gds_logs: Optional[Path]) -> None:
             print(f"Warning: could not truncate {path}: {exc}")
 
 
-# Per-sample threshold rules. Only the AVERAGE CPU channel ("CPU") is
-# checked; individual cores ("CPU_NN") deliberately omitted - per-core
-# transients during normal scheduling would generate noise alerts.
-# extreme_direction: "max" means worse = higher; "min" means worse = lower.
+# Per-sample threshold rules: (suffix, predicate, label, direction, unit).
+# direction: "max" means worse = higher; "min" means worse = lower.
 _THRESHOLD_RULES = (
     ("CPU",        lambda v: v > HIGH_CPU_PERCENT,           "High average CPU usage",   "max", "%"),
     ("NoBuffs",    lambda v: v > 0,                          "Buffer allocation failure", "max", ""),
@@ -259,8 +235,8 @@ def _format_threshold_value(suffix: str, value: float, unit: str) -> str:
 
 def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
             latest_fatal: Optional[datetime]) -> None:
-    """Populate results.alerts, results.trend_rows, results.threshold_lines,
-    and results.db_records.
+    """Populate results.alerts, results.trend_rows, results.threshold_rows,
+    and results.log_records.
 
     FSW events and threshold breaches come from THIS WINDOW. Trend analysis
     runs against the FULL HISTORY (post-FATAL window only)."""
@@ -278,7 +254,7 @@ def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
                 if when is not None and (window_fatal is None or when > window_fatal):
                     window_fatal = when
 
-    # Walk this window's channels: trend channels drain into history + DB,
+    # Walk this window's channels: trend channels drain into history + soak.log,
     # threshold channels feed the threshold-table rows.
     for channel_name, samples in results.channels.items():
         suffix = channel_name.rsplit(".", 1)[-1]
@@ -286,7 +262,7 @@ def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
         if suffix in TREND_SUFFIXES:
             for value, ts in samples:
                 history.setdefault(channel_name, []).append((value, ts))
-                results.db_records.append(f"T\t{ts}\t{channel_name}\t{value:g}")
+                results.log_records.append(f"T\t{ts}\t{channel_name}\t{value:g}")
 
         rule = _THRESHOLD_BY_SUFFIX.get(suffix)
         if rule is None:
@@ -312,9 +288,8 @@ def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
             results.emit_alert(TELEMETRY_WARNING, msg, extreme_ts,
                 f"A\t{extreme_ts}\t{TELEMETRY_WARNING}\t{msg}")
 
-    # Trend analysis over the full accumulated history. Every trend
-    # channel that has at least one sample produces a row; insufficient-
-    # sample channels render as a status of WAITING.
+    # Trend analysis over the full accumulated history.
+    # Insufficient-sample channels render as status WAITING.
     trend_channels = sorted({c for c in history.keys()
                              if c.rsplit('.', 1)[-1] in TREND_SUFFIXES})
     for channel_name in trend_channels:
@@ -322,6 +297,8 @@ def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
         is_alert_eligible = suffix in ("MEMORY_USED", "CurrBuffs")
         samples = history.get(channel_name, [])
 
+        # Restart protection: drop samples older than the latest FATAL so
+        # step changes in counters don't drown the regression.
         if window_fatal is not None:
             samples = [(v, t) for v, t in samples
                        if (_parse_iso(t) or window_fatal) >= window_fatal]
@@ -460,8 +437,8 @@ class SoakArgs(ParserBase):
                 "help": "Directory of Svc::ComLogger .com files (may be empty)."},
             ("--gds-logs",): {"type": Path, "default": None,
                 "help": "Directory of GDS session logs containing channel.log/event.log."},
-            ("--soak-database",): {"type": Path, "default": None,
-                "help": "Append-only soak database file. Trend channel samples, "
+            ("--soak-log",): {"type": Path, "default": None,
+                "help": "Append-only persistent soak log. Trend channel samples, "
                         "FSW events, and monitor-derived alerts all accumulate here. "
                         "GDS event.log/channel.log get truncated each run; this file "
                         "is the persistent record. Created by soak-setup."},
@@ -487,14 +464,14 @@ def main():
     soak_start: Optional[datetime] = None
     latest_fatal: Optional[datetime] = None
     old_alerts = 0
-    if args.soak_database is not None:
-        history, soak_start, latest_fatal, old_alerts = _read_database(args.soak_database)
+    if args.soak_log is not None:
+        history, soak_start, latest_fatal, old_alerts = _read_soak_log(args.soak_log)
 
     analyze(results, history, latest_fatal)
 
-    if args.soak_database is not None and results.db_records:
-        with args.soak_database.open("a", encoding="utf-8") as fh:
-            fh.write("\n".join(results.db_records) + "\n")
+    if args.soak_log is not None and results.log_records:
+        with args.soak_log.open("a", encoding="utf-8") as fh:
+            fh.write("\n".join(results.log_records) + "\n")
     _truncate_gds_logs(args.gds_logs)
 
     _print_summary(results, soak_start, old_alerts)

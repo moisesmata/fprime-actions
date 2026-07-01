@@ -14,11 +14,6 @@
 
 set -euo pipefail
 
-if [ -z "${DEPLOYMENT_NAME:-}" ]; then
-  echo "::error::DEPLOYMENT_NAME is required"
-  exit 1
-fi
-
 PLATFORM="${PLATFORM:-linux}"
 INSTALL_DIR="${HOME}/fprime-soak-${DEPLOYMENT_NAME}"
 TEMPLATES="${ACTION_PATH}/templates"
@@ -28,7 +23,7 @@ EXTRA_SERVICE=""
 
 rm -rf "${INSTALL_DIR}"
 mkdir -p "${INSTALL_DIR}"/{bin,dict,gds-logs,ComLoggerFiles,test}
-echo "# SOAK STARTED $(date +%Y-%m-%dT%H:%M:%S)" > "${INSTALL_DIR}/soak-database.log"
+echo "# SOAK STARTED $(date +%Y-%m-%dT%H:%M:%S)" > "${INSTALL_DIR}/soak.log"
 
 case "${PLATFORM}" in
   linux)
@@ -41,10 +36,6 @@ case "${PLATFORM}" in
     GDS_ARGS="${ZMQ_TRANSPORT} ${GDS_ARGS:-}"
     ;;
   linux-remote)
-    if [ -z "${FSW_IP:-}" ]; then
-      echo "::error::FSW_IP is required for linux-remote"
-      exit 1
-    fi
     echo "[INFO] Staging Linux artifacts"
     cp artifacts/build-artifacts/*/*/dict/*TopologyDictionary.json "${INSTALL_DIR}/dict/"
     cp artifacts/fprime-gds.yml "${INSTALL_DIR}/fprime-gds.yml" 2>/dev/null || true
@@ -57,15 +48,8 @@ case "${PLATFORM}" in
     # fprime-ci already extracted archive.tar.gz to ./build-artifacts/
     echo "[INFO] Staging Pico 2 artifacts from fprime-ci build"
     DICT_FILE=$(find ./build-artifacts -name "*TopologyDictionary.json" | head -n 1)
-    if [ -z "${DICT_FILE}" ]; then
-      echo "::error::Could not find TopologyDictionary.json in build-artifacts"
-      exit 1
-    fi
     cp "${DICT_FILE}" "${INSTALL_DIR}/dict/"
     INT_TEST_DIR=$(find . -path ./lib -prune -o -type d -name "int" -print 2>/dev/null | grep -v "^./build-artifacts" | head -n 1)
-    if [ -n "${INT_TEST_DIR}" ] && [ -d "${INT_TEST_DIR}" ]; then
-      cp -r "${INT_TEST_DIR}"/. "${INSTALL_DIR}/test/"
-    fi
     GDS_ARGS="--communication-selection uart --uart-device ${FSW_DEVICE:-/dev/pico2} --uart-baud 115200 --uart-skip-port-check ${ZMQ_TRANSPORT} ${GDS_ARGS:-}"
     EXTRA_SERVICE="SupplementaryGroups=dialout"
     ;;

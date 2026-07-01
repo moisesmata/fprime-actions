@@ -8,13 +8,13 @@ set -uo pipefail
 INSTALL_DIR="${HOME}/fprime-soak-${DEPLOYMENT_NAME}"
 DICT=$(ls "${INSTALL_DIR}"/dict/*TopologyDictionary.json)
 
-# Analyze accumulated telemetry. Checks GDS text logs first
+# Analyze accumulated telemetry. Prefers GDS text logs; ComLogger is fallback.
 echo "[INFO] Analyzing soak telemetry"
 "${INSTALL_DIR}/venv/bin/python" "${ACTION_PATH}/scripts/soak_monitor.py" \
   --dictionary "${DICT}" \
   --gds-logs "${INSTALL_DIR}/gds-logs" \
   --com-logs "${INSTALL_DIR}/ComLoggerFiles" \
-  --soak-database "${INSTALL_DIR}/soak-database.log"
+  --soak-log "${INSTALL_DIR}/soak.log"
 monitor_rc=$?
 
 # Run the deployment's integration tests.
@@ -33,7 +33,7 @@ pytest -o python_files='*.py' \
   --zmq-transport "${ZMQ_IN}" "${ZMQ_OUT}"
 pytest_rc=$?
 
-# Exit with proper return value
+# Fail the job on either the monitor or pytest, but run both first.
 if [ "${monitor_rc}" -ne 0 ]; then
   exit "${monitor_rc}"
 fi
