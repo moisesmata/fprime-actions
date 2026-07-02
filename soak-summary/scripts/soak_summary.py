@@ -6,7 +6,7 @@ soak.log rows (tab-separated, append-only). Same format used by soak_monitor.py:
   # SOAK STARTED <iso>                       header line (written by soak-setup)
   E\\t<iso>\\t<severity>\\t<name>\\t<body>   FSW event we alerted on
   A\\t<iso>\\t<severity>\\t<message>         monitor-derived alert (threshold or trend)
-  T\\t<iso>\\t<channel>\\t<value>            raw trend-channel sample
+  T\\t<iso>\\t<channel>\\t<value>            raw trend-channel sample (ignored here)
 """
 
 import argparse
@@ -22,15 +22,16 @@ def parse_iso(s):
 
 
 def format_elapsed(when, start):
-    """'(1 hour, 5 minutes since soak start)' or ''."""
+    """'(1 month, 2 weeks, 3 days, 4 hours, 5 minutes since soak start)' or ''."""
     if when is None or start is None or when < start:
         return ""
     mins = int((when - start).total_seconds() // 60)
+    mo, mins = divmod(mins, 4 * 7 * 24 * 60)
     w, mins = divmod(mins, 7 * 24 * 60)
     d, mins = divmod(mins, 24 * 60)
     h, m = divmod(mins, 60)
     parts = [f"{n} {label}{'s' if n != 1 else ''}"
-             for n, label in ((w, "week"), (d, "day"), (h, "hour")) if n]
+             for n, label in ((mo, "month"), (w, "week"), (d, "day"), (h, "hour")) if n]
     parts.append(f"{m} minute{'s' if m != 1 else ''}")
     return f"({', '.join(parts)} since soak start)"
 
@@ -106,7 +107,7 @@ def main():
     if malformed:
         print(f" Malformed lines skipped: {malformed}")
 
-    print(f"\n{dash}\n TIMELINE (events + alerts, chronological)\n{dash}")
+    print(f"\n{dash}\n TIMELINE (Events + Alerts)\n{dash}")
     parsed = sorted((e for e in entries if e[0]), key=lambda e: e[0])
     unparsed = [e for e in entries if not e[0]]
     if not parsed and not unparsed:
@@ -120,18 +121,6 @@ def main():
         print("\n (entries with unparseable timestamps)")
         for _, ts, line in unparsed:
             print(f" {ts or '<no timestamp>'}  {line}")
-
-    if telemetry:
-        print(f"\n{dash}\n TELEMETRY (T rows, per channel)\n{dash}")
-        for channel in sorted(telemetry):
-            samples = telemetry[channel]
-            s_word = "sample" if len(samples) == 1 else "samples"
-            print(f" {channel}  ({len(samples)} {s_word})")
-            for label, (when, val, ts) in (("first", samples[0]), ("last", samples[-1])):
-                print(f"   {label}: {val:g} @ {ts}")
-                elapsed = format_elapsed(when, start)
-                if elapsed:
-                    print(f"          {elapsed}")
 
 
 if __name__ == "__main__":
