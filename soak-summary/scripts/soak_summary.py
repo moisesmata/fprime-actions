@@ -22,10 +22,16 @@ def parse_iso(s):
 
 
 def format_elapsed(when, start):
-    """'(1 month, 2 weeks, 3 days, 4 hours, 5 minutes since soak start)' or ''."""
-    if when is None or start is None or when < start:
+    """'(1 month, 2 weeks, 3 days, 4 hours, 5 minutes since soak start)' or ''.
+
+    Negative deltas (event predates the recorded soak start — e.g. boot-time
+    warnings flushed before the header line) render as '... before soak start'.
+    """
+    if when is None or start is None:
         return ""
-    mins = int((when - start).total_seconds() // 60)
+    delta = when - start
+    suffix = "since soak start" if delta.total_seconds() >= 0 else "before soak start"
+    mins = int(abs(delta.total_seconds()) // 60)
     mo, mins = divmod(mins, 4 * 7 * 24 * 60)
     w, mins = divmod(mins, 7 * 24 * 60)
     d, mins = divmod(mins, 24 * 60)
@@ -33,7 +39,7 @@ def format_elapsed(when, start):
     parts = [f"{n} {label}{'s' if n != 1 else ''}"
              for n, label in ((mo, "month"), (w, "week"), (d, "day"), (h, "hour")) if n]
     parts.append(f"{m} minute{'s' if m != 1 else ''}")
-    return f"({', '.join(parts)} since soak start)"
+    return f"({', '.join(parts)} {suffix})"
 
 
 def format_duration(start, latest):
