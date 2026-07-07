@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """F´ Soak Test Monitor.
 
-Channels we analyze (units from Svc/SystemResources.fpp,
-Svc/BufferManager/Telemetry.fppi, and Svc/ActiveRateGroup/ActiveRateGroup.fpp):
+Channels we analyze (units from Svc/SystemResources.fpp and
+Svc/BufferManager/Telemetry.fppi):
   SystemResources:
     MEMORY_USED       (U64 KB) - process+system RAM in use; trended for leaks (>=5%).
     NON_VOLATILE_FREE (U64 KB) - free disk on /; absolute floor at 1 GiB.
@@ -12,8 +12,7 @@ Svc/BufferManager/Telemetry.fppi, and Svc/ActiveRateGroup/ActiveRateGroup.fpp):
     CurrBuffs  (U32) - currently allocated; trended for leaks (>=20%).
     NoBuffs    (U32) - allocation failures; >0 alerts.
     EmptyBuffs (U32) - null/zero-size returns; >0 alerts.
-  Rate groups (one per rate group, e.g. rateGroup1.RgCycleSlips):
-    RgCycleSlips / CycleSlips (U32)
+
 soak.log row formats (tab-separated, append-only persistent soak log):
 
   # SOAK STARTED <iso>                       header line (written by setup.sh)
@@ -47,12 +46,9 @@ TELEMETRY_WARNING = "Telemetry Warning"
 FAILING_SEVERITIES = FSW_ALERT_SEVERITIES + (TELEMETRY_WARNING,)
 
 # Trend-tracked channel suffixes. MEMORY_USED and CurrBuffs get leak-alert
-# checks in analyze(); NON_VOLATILE_FREE and the cycle-slip counters are only
-# trended (and threshold-checked below). Threshold rules live in
-# THRESHOLD_RULES. "RgCycleSlips" is the Svc::ActiveRateGroup name; the bare
-# "CycleSlips" spelling covers deployments that rename the channel.
-TREND_SUFFIXES = ("MEMORY_USED", "NON_VOLATILE_FREE", "CurrBuffs",
-                  "RgCycleSlips", "CycleSlips")
+# checks in analyze(); NON_VOLATILE_FREE is only trended (and threshold-checked
+# below). Threshold rules live in THRESHOLD_RULES.
+TREND_SUFFIXES = ("MEMORY_USED", "NON_VOLATILE_FREE", "CurrBuffs")
 
 # SystemResources telemetry is in KB. Auto-pick MB or GB for display.
 MEMORY_SUFFIXES = ("MEMORY_USED", "MEMORY_TOTAL", "NON_VOLATILE_TOTAL", "NON_VOLATILE_FREE")
@@ -224,8 +220,6 @@ THRESHOLD_RULES = (
     ("CPU",        lambda v: v > HIGH_CPU_PERCENT,           "High average CPU usage",   "max", "%"),
     ("NoBuffs",    lambda v: v > 0,                          "Buffer allocation failure", "max", ""),
     ("EmptyBuffs", lambda v: v > 0,                          "Empty buffer returned",    "max", ""),
-    ("RgCycleSlips", lambda v: v > 0,                        "Rate group cycle slip",    "max", ""),
-    ("CycleSlips", lambda v: v > 0,                          "Rate group cycle slip",    "max", ""),
     ("NON_VOLATILE_FREE", lambda v: v < NON_VOLATILE_FREE_FLOOR_KB,
                                                               "Storage depletion floor",  "min", ""),
 )

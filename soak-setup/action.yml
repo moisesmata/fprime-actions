@@ -1,26 +1,52 @@
 name: "F´ Soak Deploy"
-description: "Install a built F´ deployment, start the flight software, and leave persistent GDS + flight-ops rotation services running for soak testing."
+description: "Install a built F´ deployment on a target platform and start a persistent GDS service for soak testing."
 
 inputs:
   deployment-name:
-    description: "Unique name; namespaces install dir, systemd services, and ZMQ sockets."
+    description: "Unique name; namespaces install dir, systemd service, and ZMQ sockets."
     required: true
   platform:
-    description: "'linux' (FSW local on the runner) | 'linux-remote' (FSW on a Pi over SSH, user 'fprime', port 50000) | 'pico2' (FSW flashed by fprime-ci, serial /dev/pico2)."
+    description: "'linux' | 'linux-remote' | 'pico2'."
     required: true
   fsw-ip:
-    description: "Remote FSW Pi IP (linux-remote only)."
+    description: "Remote FSW Pi IP (linux-remote only). SSH user is 'fprime'."
+    required: false
+    default: ""
+  fsw-port:
+    description: "FSW TCP port (linux-remote only)."
+    required: false
+    default: "50000"
+  fsw-device:
+    description: "FSW serial device (pico2 only)."
+    required: false
+    default: "/dev/pico2"
+  gds-args:
+    description: "Extra flags appended to fprime-gds. Communication and --zmq-transport flags are added automatically."
     required: false
     default: ""
 
 runs:
   using: "composite"
   steps:
-    - name: "Soak setup (${{ inputs.platform }})"
+    - name: "Soak setup (stage artifacts + start GDS)"
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
         DEPLOYMENT_NAME: ${{ inputs.deployment-name }}
         PLATFORM: ${{ inputs.platform }}
         FSW_IP: ${{ inputs.fsw-ip }}
+        FSW_PORT: ${{ inputs.fsw-port }}
+        FSW_DEVICE: ${{ inputs.fsw-device }}
+        GDS_ARGS: ${{ inputs.gds-args }}
       run: ${{ github.action_path }}/scripts/setup.sh
+
+    - name: "Soak deploy (${{ inputs.platform }})"
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        DEPLOYMENT_NAME: ${{ inputs.deployment-name }}
+        PLATFORM: ${{ inputs.platform }}
+        FSW_IP: ${{ inputs.fsw-ip }}
+        FSW_PORT: ${{ inputs.fsw-port }}
+        FSW_DEVICE: ${{ inputs.fsw-device }}
+      run: ${{ github.action_path }}/scripts/deploy.sh
