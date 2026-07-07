@@ -44,10 +44,24 @@ case "${PLATFORM}" in
     GDS_ARGS="--communication-selection ip --ip-address ${FSW_IP} --ip-port ${FSW_PORT:-50000} --ip-client ${ZMQ_TRANSPORT} ${GDS_ARGS:-}"
     ;;
   pico2)
-    # fprime-ci already extracted archive.tar.gz to ./build-artifacts/;
-    # the target repo (with integration tests) is checked out at ./
+    # fprime-ci archives ./build-artifacts (plus dictionary/executable/test-scripts
+    # by basename) into archive.tar.gz. download-artifact drops it at cwd but
+    # does NOT extract it, so we do that here. The target repo (with integration
+    # tests) is checked out separately at ./
     echo "[INFO] Staging Pico 2 artifacts from fprime-ci build"
+    if [ -f ./archive.tar.gz ]; then
+      echo "[INFO] Extracting archive.tar.gz"
+      tar -xzf ./archive.tar.gz
+    fi
+    if [ ! -d ./build-artifacts ]; then
+      echo "::error::build-artifacts/ missing after extracting archive.tar.gz"
+      exit 1
+    fi
     DICT_FILE=$(find ./build-artifacts -name "*TopologyDictionary.json" | head -n 1)
+    if [ -z "${DICT_FILE}" ]; then
+      echo "::error::No TopologyDictionary.json found under build-artifacts/"
+      exit 1
+    fi
     cp "${DICT_FILE}" "${INSTALL_DIR}/dict/"
     INT_TEST_DIR=$(find . -path ./lib -prune -o -path ./build-artifacts -prune -o -type d -name "int" -print 2>/dev/null | head -n 1)
     if [ -n "${INT_TEST_DIR}" ] && [ -d "${INT_TEST_DIR}" ]; then
