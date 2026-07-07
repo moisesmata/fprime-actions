@@ -14,13 +14,4 @@ runs:
       env:
         ACTION_PATH: ${{ github.action_path }}
         DEPLOYMENT_NAME: ${{ inputs.deployment-name }}
-      run: |
-        INSTALL_DIR="${HOME}/fprime-soak-${DEPLOYMENT_NAME}"
-        SOAK_LOG="${INSTALL_DIR}/soak.log"
-
-        if [ ! -f "${SOAK_LOG}" ]; then
-          echo "::error::Persistent soak log not found: ${SOAK_LOG}"
-          exit 1
-        fi
-
-        python3 "${ACTION_PATH}/scripts/soak_summary.py" --soak-log "${SOAK_LOG}"
+      run: python3 "${ACTION_PATH}/scripts/soak_summary.py" --soak-log "${HOME}/fprime-soak-${DEPLOYMENT_NAME}/soak.log"

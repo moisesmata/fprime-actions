@@ -1,47 +1,77 @@
 # nasa/fprime-actions/soak-test
 
 The `soak-test` action runs the periodic half of a soak: analyze data captured
-by the persistent FSW + GDS services for health/resource/stability problems,
-then run the deployment's integration tests against the still-running GDS.
+by the persistent GDS service for health/resource/stability problems, fire a
+short high-intensity stress spike, then run the deployment's integration tests
+against the still-running GDS.
 
 It pairs with [`soak-setup`](../soak-setup/) and assumes its conventions
-(`$HOME/fprime-soak/{venv,dict,ComLoggerFiles,test}`, FSW systemd service
-`fprime-soak-fsw`). No inputs.
+(`$HOME/fprime-soak-<deployment-name>/{venv,dict,gds-logs,ComLoggerFiles,test}`,
+namespaced ZMQ sockets, and the `fprime-soak-{gds,rotation}-<deployment-name>`
+systemd services).
 
 What it does, in order:
 
-1. Verifies `fprime-soak-fsw` is active.
-2. Decodes `Svc::ComLogger` `.com` files with `fprime-gds`, raises alerts for
-   FATAL/WARNING events and resource thresholds, and runs trend analysis over
-   every numeric channel to catch slow degradations (memory leak, draining
-   buffer pool, climbing CPU, growing queue depth).
-3. Runs `pytest` against `$HOME/fprime-soak/test/` with the installed
-   dictionary, using the soak venv.
+1. Takes the per-deployment `.cron-active` lock so the deployment's flight-ops
+   rotation loop (see soak-setup) pauses for the duration of the run. The lock
+   is namespaced by deployment and removed on exit, even on failure.
+2. Runs `soak_monitor.py`: decodes GDS text logs (ComLogger `.com` files as
+   fallback), raises alerts for FATAL/WARNING events and threshold breaches,
+   runs trend analysis over the accumulated history in the append-only
+   `soak.log`, then truncates the GDS logs for the next window.
+3. Runs `flight-ops-rotation.sh spike`: the stress spike (see below).
+4. Runs `pytest` against `$HOME/fprime-soak-<deployment-name>/test/` (the
+   deployment's own integration tests) over the namespaced ZMQ transport,
+   doubling as the post-spike health check.
 
-Any FATAL event, threshold breach, or pytest failure fails the step.
+Any FATAL event, threshold breach, spike failure, or pytest failure fails the
+step - all phases run before the step exits.
 
 ## Usage
 
 ```yaml
 - uses: nasa/fprime-actions/soak-test@devel
+  with:
+    deployment-name: my-deployment
 ```
 
-## Trend analysis
+## Telemetry analysis
 
-Every numeric channel time-series is fit with a least-squares slope and
-compared first-to-last. Channels are classified by name (case-insensitive
-substring) to distinguish "a number that changed" from "a problem":
+Threshold checks run on every sample in the current window:
 
-| Channel pattern (case-insensitive)              | Concerning direction | Alert                       |
-|-------------------------------------------------|----------------------|-----------------------------|
-| `MEMORY_USED` (Os::SystemResources, KB)         | rising               | possible memory leak        |
-| `NON_VOLATILE_FREE`, `HiBuffs` / `LoBuffs`      | falling              | possible resource depletion |
-| `systemResources.CPU`, `CPU_NN` (percent)       | rising               | rising CPU trend            |
-| `comQueueDepth`, `buffQueueDepth`               | rising               | rising queue depth          |
+| Channel suffix               | Rule           | Alert                     |
+|------------------------------|----------------|---------------------------|
+| `CPU`                        | > 85%          | high average CPU usage    |
+| `NoBuffs`                    | > 0            | buffer allocation failure |
+| `EmptyBuffs`                 | > 0            | empty buffer returned     |
+| `RgCycleSlips` / `CycleSlips`| > 0            | rate group cycle slip     |
+| `NON_VOLATILE_FREE`          | < 1 GiB        | storage depletion floor   |
 
-`MEMORY_TOTAL`, `NON_VOLATILE_TOTAL`, and rate-group timing channels
-(`RgMaxTime`) are recorded but do not raise trend alerts. CPU channels also
-trigger an instantaneous alert above 90%.
+Trend checks (least-squares fit over the accumulated post-FATAL history):
+`MEMORY_USED` (>= 5% rise alerts as a possible memory leak), `CurrBuffs`
+(>= 20% rise alerts as a possible buffer leak), while `NON_VOLATILE_FREE` and
+the cycle-slip counters are trended for the record without trend alerts.
 
-Thresholds (growth/drop percentages and the minimum sample count) are defined
-as constants at the top of [`scripts/soak_monitor.py`](scripts/soak_monitor.py).
+Thresholds and trend constants are defined at the top of
+[`scripts/soak_monitor.py`](scripts/soak_monitor.py).
+
+## Stress spike
+
+The spike is the installed rotation script in one-shot mode
+(`$INSTALL_DIR/flight-ops-rotation.sh spike`) - the same `fprime-cli` command
+path and standard `Svc/Subtopologies` command names as the between-cron
+nominal loop, so there is exactly one command-sending mechanism. It fires:
+
+- **Command burst saturation** - back-to-back no-op commands with no pacing
+  (`SPIKE_BURST_COUNT`, default 25) to saturate `CmdDispatcher`, followed by
+  a final commanded round trip proving recovery.
+- **File downlink burst** (Linux platforms only) - two back-to-back
+  `FileHandling.fileDownlink.SendFile` transfers stressing `BufferManager`
+  and disk I/O. Skipped on `pico2`.
+- **Parameter persistence churn** (both platforms) - repeated
+  `FileHandling.prmDb.PRM_SAVE_FILE` rounds exercising the non-volatile write
+  path.
+
+The burst is sized to saturate queues without forcing hard buffer exhaustion,
+because the monitor treats any `NoBuffs`/`EmptyBuffs` sample above zero as a
+failure.
