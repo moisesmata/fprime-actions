@@ -26,11 +26,21 @@ cd "${INSTALL_DIR}/test"
 ZMQ_IN="ipc:///tmp/fprime-server-${DEPLOYMENT_NAME}-in"
 ZMQ_OUT="ipc:///tmp/fprime-server-${DEPLOYMENT_NAME}-out"
 
+# If the deployment ships an int_config.json (mapping generic type names like
+# Svc.FatalHandler to concrete instance mnemonics), forward it to pytest so
+# fprime_test_api.get_mnemonic() can resolve. Without this, get_mnemonic()
+# fails with `expected str, bytes or os.PathLike object, not NoneType`.
+DEPLOYMENT_CONFIG_ARGS=()
+if [ -f "${INSTALL_DIR}/test/int_config.json" ]; then
+  DEPLOYMENT_CONFIG_ARGS=(--deployment-config "${INSTALL_DIR}/test/int_config.json")
+fi
+
 # Override pytest's default python_files=test_*.py so deployments that name
 # tests <something>_integration_tests.py (e.g. led-blinker) still get collected.
 pytest -o python_files='*.py' \
   --dictionary "${DICT}" \
-  --zmq-transport "${ZMQ_IN}" "${ZMQ_OUT}"
+  --zmq-transport "${ZMQ_IN}" "${ZMQ_OUT}" \
+  "${DEPLOYMENT_CONFIG_ARGS[@]}"
 pytest_rc=$?
 
 # Fail the job on either the monitor or pytest, but run both first.
