@@ -168,7 +168,9 @@ def test_core_commands_stress_burst(fprime_test_api):
 
     count = _int_env("SOAK_STRESS_COMMAND_COUNT", 300)
     inter_delay = _float_env("SOAK_STRESS_INTER_CMD_DELAY", 0.0)
-    liveness_timeout = _float_env("SOAK_STRESS_LIVENESS_TIMEOUT", 30.0)
+    # Must be an int: the test API forwards this straight to signal.alarm(),
+    # which rejects floats with "'float' object cannot be interpreted as an integer".
+    liveness_timeout = _int_env("SOAK_STRESS_LIVENESS_TIMEOUT", 30)
     min_completions = _int_env(
         "SOAK_STRESS_MIN_COMPLETIONS", max(1, count // 10)
     )
