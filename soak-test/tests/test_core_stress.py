@@ -19,46 +19,60 @@ Linux vs. Zephyr support
 ------------------------
 The Zephyr reference only imports CdhCore + ComCcsds, so it lacks the
 DataProducts commands the Linux Ref deployment has. Rather than branch on
-platform, every candidate command is looked up in the *live FSW dictionary*
+platform, every candidate command is matched against the *live FSW dictionary*
 (pipeline.dictionaries.command_name). Commands the flashed image doesn't have
 are skipped and logged. The same test therefore adapts to either platform.
 
+This test deliberately does NOT depend on a deployment int_config.json (the
+generic-name -> instance alias table that get_mnemonic() reads). Not every
+deployment ships one -- led-blinker, for instance, does not -- and depending on
+it made this generic test crash in get_mnemonic() with
+"expected str, bytes or os.PathLike object, not NoneType". Instead we read the
+fully qualified mnemonics straight from the live dictionary, whose keys look
+like "CdhCore.cmdDisp.CMD_NO_OP", and match on the command-name suffix.
+
 Tuning (environment variables, all optional):
-  SOAK_STRESS_COMMAND_COUNT  total commands in the burst        (default 300)
-  SOAK_STRESS_MIN_COMPLETIONS floor of completions to require   (default count//10, min 1)
-  SOAK_STRESS_INTER_CMD_DELAY seconds between burst sends       (default 0.0 = as fast as possible)
-  SOAK_STRESS_LIVENESS_TIMEOUT seconds to await post-burst NO_OP (default 30)
+  SOAK_STRESS_COMMAND_COUNT    total commands in the burst        (default 300)
+  SOAK_STRESS_MIN_COMPLETIONS  floor of completions to require    (default count//10, min 1)
+  SOAK_STRESS_INTER_CMD_DELAY  seconds between burst sends        (default 0.0 = as fast as possible)
+  SOAK_STRESS_LIVENESS_TIMEOUT seconds to await post-burst NO_OP  (default 30)
 """
 
 import os
-
-import pytest
+import time
 
 # ----------------------------------------------------------------------------
-# Candidate core commands.
+# Candidate core commands, by command-name suffix.
 #
-# Each entry is (generic_type, command_name, args). generic_type is the
-# platform-independent name resolved through int_config.json via get_mnemonic;
-# args are chosen to be non-destructive so the command can be fired repeatedly
-# in a burst without leaving the FSW in a degraded state.
+# Keys are the bare command names as they appear at the end of a fully qualified
+# dictionary mnemonic (e.g. "CMD_NO_OP" in "CdhCore.cmdDisp.CMD_NO_OP"). Values
+# are non-destructive args chosen so the command can be fired repeatedly in a
+# burst without leaving the FSW in a degraded state.
+#
+# We match on suffix rather than a hardcoded instance path so this stays generic
+# across deployments that name their instances differently.
 # ----------------------------------------------------------------------------
 
 # CdhCore -- present on every deployment (Linux and Zephyr).
-CDHCORE_COMMANDS = [
-    ("Svc.CommandDispatcher", "CMD_NO_OP", []),
-    ("Svc.CommandDispatcher", "CMD_NO_OP_STRING", ["soak_stress"]),
-    ("Svc.CommandDispatcher", "CMD_TEST_CMD_1", [1, 2.0, 3]),
-    ("Svc.EventManager", "DUMP_FILTER_STATE", []),
-    ("Svc.Version", "VERSION", ["FRAMEWORK"]),
-]
+CDHCORE_COMMANDS = {
+    "CMD_NO_OP": [],
+    "CMD_NO_OP_STRING": ["soak_stress"],
+    "CMD_TEST_CMD_1": [1, 2.0, 3],
+    "DUMP_FILTER_STATE": [],
+    "VERSION": ["FRAMEWORK"],
+}
 
 # DataProducts -- Linux Ref only; absent on the Zephyr reference. Rebuilding the
 # catalog is a genuine, non-destructive stressor of the data-product stack.
-DATAPRODUCTS_COMMANDS = [
-    ("Svc.DpCatalog", "BUILD_CATALOG", []),
-]
+DATAPRODUCTS_COMMANDS = {
+    "BUILD_CATALOG": [],
+}
 
-CANDIDATE_COMMANDS = CDHCORE_COMMANDS + DATAPRODUCTS_COMMANDS
+CANDIDATE_COMMANDS = {**CDHCORE_COMMANDS, **DATAPRODUCTS_COMMANDS}
+
+# The command dispatcher emits this event on every completion. Matched by suffix.
+OP_CODE_COMPLETED_SUFFIX = "OpCodeCompleted"
+NO_OP_SUFFIX = "CMD_NO_OP"
 
 
 def _int_env(name, default):
@@ -82,28 +96,49 @@ def _float_env(name, default):
         return default
 
 
+def _find_by_suffix(name_dict, suffix):
+    """Return the fully qualified key in name_dict ending in ".<suffix>".
+
+    Returns None if no key matches. If several match (multiple instances of the
+    same component), the first is returned -- fine for these core singletons.
+    """
+    for key in name_dict.keys():
+        if key == suffix or key.endswith(f".{suffix}"):
+            return key
+    return None
+
+
 def _resolve_available_commands(fprime_test_api):
     """Resolve candidate commands against the live FSW dictionary.
 
     Returns a list of (mnemonic, args) for the commands the flashed image
-    actually has. Commands absent from the dictionary (e.g. DataProducts on
-    Zephyr) are skipped and logged -- this is the Linux/Zephyr support hook.
+    actually has, discovered by matching the command-name suffix. Commands
+    absent from the dictionary (e.g. DataProducts on Zephyr) are skipped and
+    logged -- this is the Linux/Zephyr support hook.
     """
     cmd_dict = fprime_test_api.pipeline.dictionaries.command_name
     available = []
     skipped = []
-    for comp, name, args in CANDIDATE_COMMANDS:
-        mnemonic = fprime_test_api.get_mnemonic(comp, name)
-        if mnemonic in cmd_dict:
+    for suffix, args in CANDIDATE_COMMANDS.items():
+        mnemonic = _find_by_suffix(cmd_dict, suffix)
+        if mnemonic is not None:
             available.append((mnemonic, args))
         else:
-            skipped.append(mnemonic)
+            skipped.append(suffix)
     if skipped:
         print(f"[stress] Skipping {len(skipped)} command(s) not in this "
               f"deployment's dictionary: {', '.join(skipped)}")
     print(f"[stress] {len(available)} core command(s) available: "
           f"{', '.join(m for m, _ in available)}")
     return available
+
+
+def _find_no_op(available):
+    """Return the resolved CMD_NO_OP mnemonic from the available list."""
+    for mnemonic, _ in available:
+        if mnemonic.endswith(f".{NO_OP_SUFFIX}") or mnemonic == NO_OP_SUFFIX:
+            return mnemonic
+    return None
 
 
 def test_core_commands_correctness(fprime_test_api):
@@ -139,10 +174,14 @@ def test_core_commands_stress_burst(fprime_test_api):
     )
 
     # OpCodeCompleted is emitted by the command dispatcher on every completion.
-    # Resolve its mnemonic the same way as commands so it matches the dictionary.
-    completed_event = fprime_test_api.get_mnemonic(
-        "Svc.CommandDispatcher", "OpCodeCompleted"
+    event_dict = fprime_test_api.pipeline.dictionaries.event_name
+    completed_event = _find_by_suffix(event_dict, OP_CODE_COMPLETED_SUFFIX)
+    assert completed_event is not None, (
+        f"{OP_CODE_COMPLETED_SUFFIX} event not found in dictionary"
     )
+
+    no_op = _find_no_op(available)
+    assert no_op is not None, "CMD_NO_OP not available for the liveness check"
 
     print(f"[stress] Firing {count} commands (inter-command delay={inter_delay}s); "
           f"requiring >= {min_completions} completions and post-burst liveness")
@@ -157,8 +196,6 @@ def test_core_commands_stress_burst(fprime_test_api):
         mnemonic, args = available[i % len(available)]
         fprime_test_api.send_command(mnemonic, args)
         if inter_delay > 0:
-            import time
-
             time.sleep(inter_delay)
 
     # Count how many OpCodeCompleted events landed. On a lossy link this is < count;
@@ -177,10 +214,7 @@ def test_core_commands_stress_burst(fprime_test_api):
     # Liveness: a fresh NO_OP must dispatch AND complete after the burst. This is
     # the strict survival gate -- it proves the dispatcher drained and the comm
     # path recovered.
-    fprime_test_api.send_and_assert_command(
-        fprime_test_api.get_mnemonic("Svc.CommandDispatcher", "CMD_NO_OP"),
-        timeout=liveness_timeout,
-    )
+    fprime_test_api.send_and_assert_command(no_op, timeout=liveness_timeout)
 
     assert num_completed >= min_completions, (
         f"Only {num_completed} of {count} stress commands completed "
