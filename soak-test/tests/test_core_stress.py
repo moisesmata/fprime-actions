@@ -6,35 +6,28 @@ It is designed to run against any deployment's persistent soak GDS.
 
 Two portions:
 
-  1. Reachability gate -- each available core command is fired once, then the
-     FSW is proven to still service commands. Fail-fast: if the command path is
-     fundamentally broken, there's no point running the burst.
+  1. Reachability gate -- each available core command is fired once and its
+     completion is required. Fail-fast: if a core command can't round-trip even
+     once, there's no point running the burst.
 
   2. Sharp stress burst -- hundreds of non-destructive commands are fired
-     back-to-back with no throttle, then the FSW is proven to have survived.
-     This is deliberately hard on the comm link (e.g. a 115200-baud UART
-     downlink) to surface command-dispatcher queue overflow, buffer leaks,
-     crashes, and wedges under load.
+     back-to-back with no throttle, and EVERY command's completion event must be
+     received. This is deliberately hard on the comm link (e.g. a 115200-baud
+     UART downlink) and on the command dispatcher / ComQueue.
 
-What this test asserts (and, deliberately, what it does NOT)
------------------------------------------------------------
-The pass/fail invariant is FSW *survival*, not downlink completeness. A sharp
-burst intentionally saturates the telemetry downlink: hundreds of commands fan
-out into thousands of events that overflow the bounded ComQueue / event queues,
-so many completion events are dropped or delayed. That is expected under flood
--- and on the Zephyr UART downlink, telemetry can lag by seconds to minutes.
+What this test asserts
+----------------------
+The pass/fail invariant is that we receive one OpCodeCompleted event for every
+command sent -- i.e. zero dropped completions. The FSW is run at raised CPU
+priority so the ComQueue does not overflow under the burst, so full downlink of
+every completion is the expected, required behavior. Any shortfall means
+commands were dropped, completions were lost on the link, or the ComQueue
+overflowed -- all of which are real faults this soak test exists to catch.
 
-An earlier version gated on "how many OpCodeCompleted events came back," which
-measured downlink throughput, not FSW health: a perfectly healthy Linux FSW
-that executed all 300 commands in ~3 ms still only downlinked ~14 completion
-events, and Zephyr's backlogged link failed even a single-command wait. So:
-
-  * completions observed during the burst are logged as INFORMATIONAL only, and
-  * the gate is a liveness probe (a fresh NO_OP that eventually completes),
-    retried with generous timeouts to tolerate a lossy / backlogged link.
-
-A truly wedged or crashed FSW never services the liveness NO_OP and fails; a
-merely lossy downlink does not.
+Because a lossy or slow link (notably the Zephyr UART downlink) can deliver
+completions well after the last command is sent, we await the full count with a
+generous, configurable timeout rather than a fixed short window. The timeout
+bounds how long we wait for the downlink to drain, not what we accept.
 
 Linux vs. Zephyr support
 ------------------------
@@ -51,11 +44,9 @@ fully qualified mnemonics straight from the live dictionary, whose keys look
 like "CdhCore.cmdDisp.CMD_NO_OP", and match on the command-name suffix.
 
 Tuning (environment variables, all optional):
-  SOAK_STRESS_COMMAND_COUNT     total commands in the burst        (default 300)
-  SOAK_STRESS_INTER_CMD_DELAY   seconds between burst sends        (default 0.0 = as fast as possible)
-  SOAK_STRESS_LIVENESS_TIMEOUT  seconds per liveness attempt (int) (default 30)
-  SOAK_STRESS_LIVENESS_ATTEMPTS liveness retries before failing    (default 3)
-  SOAK_STRESS_MIN_COMPLETIONS   optional informational floor; 0 = don't gate (default 0)
+  SOAK_STRESS_COMMAND_COUNT   total commands in the burst              (default 300)
+  SOAK_STRESS_INTER_CMD_DELAY seconds between burst sends              (default 0.0 = as fast as possible)
+  SOAK_STRESS_DRAIN_TIMEOUT   seconds to await all completions (int)   (default 120)
 """
 
 import os
@@ -92,7 +83,6 @@ CANDIDATE_COMMANDS = {**CDHCORE_COMMANDS, **DATAPRODUCTS_COMMANDS}
 
 # The command dispatcher emits this event on every completion. Matched by suffix.
 OP_CODE_COMPLETED_SUFFIX = "OpCodeCompleted"
-NO_OP_SUFFIX = "CMD_NO_OP"
 
 
 def _int_env(name, default):
@@ -153,140 +143,103 @@ def _resolve_available_commands(fprime_test_api):
     return available
 
 
-def _resolve_no_op(fprime_test_api):
-    """Return the fully qualified CMD_NO_OP mnemonic, or None if unavailable."""
-    cmd_dict = fprime_test_api.pipeline.dictionaries.command_name
-    return _find_by_suffix(cmd_dict, NO_OP_SUFFIX)
-
-
 def _resolve_completed_event(fprime_test_api):
     """Return the fully qualified OpCodeCompleted event mnemonic, or None."""
     event_dict = fprime_test_api.pipeline.dictionaries.event_name
     return _find_by_suffix(event_dict, OP_CODE_COMPLETED_SUFFIX)
 
 
-def _assert_fsw_alive(fprime_test_api, no_op, completed_event, timeout, attempts):
-    """Prove the FSW still services commands by observing a NO_OP completion.
+def _fire_and_assert_all_completed(
+    fprime_test_api, sends, completed_event, timeout, inter_delay=0.0
+):
+    """Fire every (mnemonic, args) in `sends`, then require ALL completions.
 
-    Sends a fresh NO_OP and awaits at least one OpCodeCompleted event within
-    `timeout` seconds, retrying up to `attempts` times. Loss-tolerant on
-    purpose: a lossy or backlogged downlink just needs ONE completion to arrive
-    across all attempts. A wedged/crashed FSW yields none and fails the assert.
+    Sends the whole batch (optionally throttled by inter_delay seconds) with no
+    wait-for-completion (the sharp part), then awaits exactly len(sends)
+    OpCodeCompleted events. await_event_count returns whatever it found when the
+    count is reached or the timeout elapses, so we assert on the returned length:
+    full count == every command completed and every completion was downlinked
+    (zero drops).
     """
-    for attempt in range(1, attempts + 1):
-        start = fprime_test_api.get_event_test_history().size()
-        fprime_test_api.send_command(no_op)
-        found = fprime_test_api.await_event_count(
-            1, events=completed_event, start=start, timeout=timeout
-        )
-        if found:
-            print(f"[stress] Liveness OK: NO_OP completion observed on attempt "
-                  f"{attempt}/{attempts}")
-            return
-        print(f"[stress] Liveness attempt {attempt}/{attempts} saw no NO_OP "
-              f"completion within {timeout}s; retrying")
-    raise AssertionError(
-        f"FSW did not service a NO_OP within {attempts} attempts of {timeout}s "
-        f"each. FSW appears wedged or crashed (this is NOT a mere downlink "
-        f"loss -- not even one completion arrived across all attempts)."
+    expected = len(sends)
+
+    # Clear histories and record the event start index so we count only the
+    # completions triggered by this batch.
+    fprime_test_api.clear_histories()
+    event_start = fprime_test_api.get_event_test_history().size()
+
+    for mnemonic, args in sends:
+        fprime_test_api.send_command(mnemonic, args)
+        if inter_delay > 0:
+            time.sleep(inter_delay)
+
+    completions = fprime_test_api.await_event_count(
+        expected,
+        events=completed_event,
+        start=event_start,
+        timeout=timeout,
+    )
+    num_completed = len(completions)
+    print(f"[stress] Received {num_completed}/{expected} OpCodeCompleted events")
+
+    assert num_completed >= expected, (
+        f"Only {num_completed} of {expected} commands completed within "
+        f"{timeout}s. Missing {expected - num_completed} completion event(s): "
+        f"commands were dropped, completions were lost on the downlink, or the "
+        f"ComQueue overflowed."
     )
 
 
 def test_core_commands_reachable(fprime_test_api):
-    """Fire each available core command once, then confirm the FSW is alive.
+    """Fire each available core command once and require every completion.
 
-    Fail-fast gate. Sending every core command exercises its uplink, decode, and
-    dispatch path; the subsequent liveness probe confirms the FSW processed
-    through them without wedging (e.g. a bad-arg command that FW_ASSERTs on board
-    would crash the FSW and fail the liveness check). We do NOT assert per-command
-    completion events, because downlink loss on a lossy link (Zephyr UART) would
-    make that flaky without indicating any real FSW fault.
+    Fail-fast gate: exercises each core command's uplink, decode, and dispatch
+    path, and requires all of their completion events back before the burst runs.
     """
     available = _resolve_available_commands(fprime_test_api)
     assert available, "No core commands found in the FSW dictionary"
 
-    no_op = _resolve_no_op(fprime_test_api)
-    assert no_op is not None, "CMD_NO_OP not available for the liveness check"
     completed_event = _resolve_completed_event(fprime_test_api)
     assert completed_event is not None, (
         f"{OP_CODE_COMPLETED_SUFFIX} event not found in dictionary"
     )
 
-    timeout = _int_env("SOAK_STRESS_LIVENESS_TIMEOUT", 30)
-    attempts = _int_env("SOAK_STRESS_LIVENESS_ATTEMPTS", 3)
+    # Timeout is an int: the test API forwards it to signal.alarm(), which
+    # rejects floats with "'float' object cannot be interpreted as an integer".
+    timeout = _int_env("SOAK_STRESS_DRAIN_TIMEOUT", 120)
 
-    for mnemonic, args in available:
-        fprime_test_api.send_command(mnemonic, args)
-
-    _assert_fsw_alive(fprime_test_api, no_op, completed_event, timeout, attempts)
+    _fire_and_assert_all_completed(
+        fprime_test_api, available, completed_event, timeout
+    )
 
 
 def test_core_commands_stress_burst(fprime_test_api):
-    """Fire hundreds of core commands back-to-back, then prove FSW survival.
+    """Fire hundreds of core commands back-to-back; require EVERY completion.
 
     The burst is intentionally un-throttled to stress the command/telemetry
-    path. The gate is survival (a post-burst NO_OP eventually completes), NOT
-    downlink completeness -- see the module docstring. The count of completion
-    events observed during the burst is logged as an informational
-    downlink-throughput datapoint and only gates when SOAK_STRESS_MIN_COMPLETIONS
-    is explicitly set > 0.
+    path. With the FSW at raised CPU priority the ComQueue should not overflow,
+    so all `count` completion events are expected to be downlinked. We await the
+    full count with a generous timeout (to let a slow link drain) and assert we
+    received every one.
     """
     available = _resolve_available_commands(fprime_test_api)
     assert available, "No core commands found in the FSW dictionary"
 
     count = _int_env("SOAK_STRESS_COMMAND_COUNT", 300)
     inter_delay = _float_env("SOAK_STRESS_INTER_CMD_DELAY", 0.0)
-    # Timeouts are ints: the test API forwards them to signal.alarm(), which
-    # rejects floats with "'float' object cannot be interpreted as an integer".
-    liveness_timeout = _int_env("SOAK_STRESS_LIVENESS_TIMEOUT", 30)
-    liveness_attempts = _int_env("SOAK_STRESS_LIVENESS_ATTEMPTS", 3)
-    # Optional informational floor. 0 (default) means "do not gate on it".
-    min_completions = _int_env("SOAK_STRESS_MIN_COMPLETIONS", 0)
+    timeout = _int_env("SOAK_STRESS_DRAIN_TIMEOUT", 120)
 
     completed_event = _resolve_completed_event(fprime_test_api)
     assert completed_event is not None, (
         f"{OP_CODE_COMPLETED_SUFFIX} event not found in dictionary"
     )
-    no_op = _resolve_no_op(fprime_test_api)
-    assert no_op is not None, "CMD_NO_OP not available for the liveness check"
 
     print(f"[stress] Firing {count} commands (inter-command delay={inter_delay}s); "
-          f"gate = post-burst survival")
+          f"requiring all {count} completions within {timeout}s")
 
-    # Clear histories and record the event history start index so the completion
-    # tally counts only events observed after the burst begins.
-    fprime_test_api.clear_histories()
-    event_start = fprime_test_api.get_event_test_history().size()
+    # Build the burst list, cycling through the available commands.
+    sends = [available[i % len(available)] for i in range(count)]
 
-    # --- The sharp part: fire everything with no wait-for-completion. ---
-    for i in range(count):
-        mnemonic, args = available[i % len(available)]
-        fprime_test_api.send_command(mnemonic, args)
-        if inter_delay > 0:
-            time.sleep(inter_delay)
-
-    # Informational: how many completion events actually made it back. On a
-    # saturated/lossy downlink this is expected to be << count. We wait briefly
-    # for whatever drains within one liveness window, then just report it.
-    completions = fprime_test_api.await_event_count(
-        max(1, min_completions) if min_completions > 0 else count,
-        events=completed_event,
-        start=event_start,
-        timeout=liveness_timeout,
+    _fire_and_assert_all_completed(
+        fprime_test_api, sends, completed_event, timeout, inter_delay=inter_delay
     )
-    num_completed = len(completions)
-    print(f"[stress] Observed {num_completed}/{count} OpCodeCompleted events "
-          f"downlinked during the burst window (informational; downlink loss "
-          f"under flood is expected)")
-
-    # Gate: the FSW must still service commands after the flood.
-    _assert_fsw_alive(
-        fprime_test_api, no_op, completed_event, liveness_timeout, liveness_attempts
-    )
-
-    # Optional secondary gate, only if the operator explicitly opted in.
-    if min_completions > 0:
-        assert num_completed >= min_completions, (
-            f"Only {num_completed} of {count} completions downlinked "
-            f"(operator floor SOAK_STRESS_MIN_COMPLETIONS={min_completions})."
-        )
