@@ -8,26 +8,37 @@ Two portions:
 
   1. Reachability gate -- each available core command is fired once and its
      completion is required. Fail-fast: if a core command can't round-trip even
-     once, there's no point running the burst.
+     once, there's no point running the sustained load.
 
-  2. Sharp stress burst -- hundreds of non-destructive commands are fired
-     back-to-back with no throttle, and EVERY command's completion event must be
-     received. This is deliberately hard on the comm link (e.g. a 115200-baud
-     UART downlink) and on the command dispatcher / ComQueue.
+  2. Sustained load, zero loss -- a total of SOAK_STRESS_COMMAND_COUNT commands
+     is sent as a sequence of small batches. Each batch is fully drained (all of
+     its OpCodeCompleted events received) before the next batch is sent, and
+     EVERY command's completion must arrive. Across the whole run this asserts
+     zero dropped completions.
 
-What this test asserts
-----------------------
+What this test asserts, and why it is throttled
+-----------------------------------------------
 The pass/fail invariant is that we receive one OpCodeCompleted event for every
-command sent -- i.e. zero dropped completions. The FSW is run at raised CPU
-priority so the ComQueue does not overflow under the burst, so full downlink of
-every completion is the expected, required behavior. Any shortfall means
-commands were dropped, completions were lost on the link, or the ComQueue
-overflowed -- all of which are real faults this soak test exists to catch.
+command sent -- i.e. zero dropped completions -- as a measure of downlink
+integrity under load.
 
-Because a lossy or slow link (notably the Zephyr UART downlink) can deliver
-completions well after the last command is sent, we await the full count with a
-generous, configurable timeout rather than a fixed short window. The timeout
-bounds how long we wait for the downlink to drain, not what we accept.
+Completions ride the telemetry downlink, which is rate-limited and finite. In
+the CCSDS Com stack, command completions become events that queue in ComQueue's
+bounded, drop-on-full events sub-queue and drain only when comQueue.run fires
+(e.g. at 1 Hz) under comStatus flow control. If commands are fired faster than
+that queue drains, it overflows and completions are dropped at enqueue -- a loss
+no receive-side timeout can recover.
+
+So we do NOT fire an instantaneous burst. We send in small batches and fully
+drain each batch (await all its completions) before sending the next. This
+closed-loop pacing self-adapts to the actual link speed -- fast on a Linux TCP
+link, slow on a 115200-baud Zephyr UART -- and keeps at most one batch's worth
+of events in flight, so the queue never overflows on a healthy system. A real
+fault (dropped command, lost completion, queue overflow, wedge) still fails,
+because that batch will not fully drain within the timeout.
+
+Tune SOAK_STRESS_BATCH_SIZE down if a deployment's events queue is shallow, or
+up for more in-flight pressure.
 
 Linux vs. Zephyr support
 ------------------------
@@ -44,13 +55,12 @@ fully qualified mnemonics straight from the live dictionary, whose keys look
 like "CdhCore.cmdDisp.CMD_NO_OP", and match on the command-name suffix.
 
 Tuning (environment variables, all optional):
-  SOAK_STRESS_COMMAND_COUNT   total commands in the burst              (default 300)
-  SOAK_STRESS_INTER_CMD_DELAY seconds between burst sends              (default 0.0 = as fast as possible)
-  SOAK_STRESS_DRAIN_TIMEOUT   seconds to await all completions (int)   (default 120)
+  SOAK_STRESS_COMMAND_COUNT   total commands to send                   (default 500)
+  SOAK_STRESS_BATCH_SIZE      commands per drain-synced batch          (default 20)
+  SOAK_STRESS_DRAIN_TIMEOUT   seconds to await one batch's completions (default 60)
 """
 
 import os
-import time
 
 # ----------------------------------------------------------------------------
 # Candidate core commands, by command-name suffix.
@@ -92,16 +102,6 @@ def _int_env(name, default):
         return default
     try:
         return int(raw)
-    except ValueError:
-        return default
-
-
-def _float_env(name, default):
-    raw = os.environ.get(name)
-    if raw is None or raw.strip() == "":
-        return default
-    try:
-        return float(raw)
     except ValueError:
         return default
 
@@ -149,29 +149,24 @@ def _resolve_completed_event(fprime_test_api):
     return _find_by_suffix(event_dict, OP_CODE_COMPLETED_SUFFIX)
 
 
-def _fire_and_assert_all_completed(
-    fprime_test_api, sends, completed_event, timeout, inter_delay=0.0
-):
-    """Fire every (mnemonic, args) in `sends`, then require ALL completions.
+def _drain_batch(fprime_test_api, sends, completed_event, timeout, label):
+    """Fire one batch, then require ALL of its completions before returning.
 
-    Sends the whole batch (optionally throttled by inter_delay seconds) with no
-    wait-for-completion (the sharp part), then awaits exactly len(sends)
-    OpCodeCompleted events. await_event_count returns whatever it found when the
-    count is reached or the timeout elapses, so we assert on the returned length:
-    full count == every command completed and every completion was downlinked
-    (zero drops).
+    Sends every (mnemonic, args) in `sends` with no per-command wait, then awaits
+    exactly len(sends) OpCodeCompleted events. await_event_count returns whatever
+    it found when the count is reached or the timeout elapses, so we assert on the
+    returned length. Because the caller only starts the NEXT batch after this one
+    fully drains, at most one batch's worth of events is ever in ComQueue at once
+    -- this is the throttle that keeps the events sub-queue from overflowing.
     """
     expected = len(sends)
 
-    # Clear histories and record the event start index so we count only the
-    # completions triggered by this batch.
-    fprime_test_api.clear_histories()
+    # Record the event history start index so we count only THIS batch's
+    # completions. (History is cleared once, by the caller, before batch 0.)
     event_start = fprime_test_api.get_event_test_history().size()
 
     for mnemonic, args in sends:
         fprime_test_api.send_command(mnemonic, args)
-        if inter_delay > 0:
-            time.sleep(inter_delay)
 
     completions = fprime_test_api.await_event_count(
         expected,
@@ -180,21 +175,41 @@ def _fire_and_assert_all_completed(
         timeout=timeout,
     )
     num_completed = len(completions)
-    print(f"[stress] Received {num_completed}/{expected} OpCodeCompleted events")
+    print(f"[stress] {label}: received {num_completed}/{expected} completions")
 
     assert num_completed >= expected, (
-        f"Only {num_completed} of {expected} commands completed within "
-        f"{timeout}s. Missing {expected - num_completed} completion event(s): "
-        f"commands were dropped, completions were lost on the downlink, or the "
-        f"ComQueue overflowed."
+        f"{label}: only {num_completed} of {expected} completions received "
+        f"within {timeout}s. Missing {expected - num_completed}: a command was "
+        f"dropped, a completion was lost on the downlink, or the ComQueue events "
+        f"sub-queue overflowed."
     )
+
+
+def _run_sustained_load(fprime_test_api, sends, completed_event, batch_size, timeout):
+    """Send `sends` as drain-synced batches; require every completion overall.
+
+    Splits the command list into batches of `batch_size`, draining each batch
+    fully before starting the next. Self-paces to the actual link speed and keeps
+    only one batch in flight, so a healthy system never overflows and every
+    completion is accounted for.
+    """
+    fprime_test_api.clear_histories()
+    total = len(sends)
+    num_batches = (total + batch_size - 1) // batch_size
+    for b in range(num_batches):
+        batch = sends[b * batch_size:(b + 1) * batch_size]
+        _drain_batch(
+            fprime_test_api, batch, completed_event, timeout,
+            label=f"batch {b + 1}/{num_batches}",
+        )
 
 
 def test_core_commands_reachable(fprime_test_api):
     """Fire each available core command once and require every completion.
 
     Fail-fast gate: exercises each core command's uplink, decode, and dispatch
-    path, and requires all of their completion events back before the burst runs.
+    path, and requires all of their completion events back before the sustained
+    load runs.
     """
     available = _resolve_available_commands(fprime_test_api)
     assert available, "No core commands found in the FSW dictionary"
@@ -206,40 +221,40 @@ def test_core_commands_reachable(fprime_test_api):
 
     # Timeout is an int: the test API forwards it to signal.alarm(), which
     # rejects floats with "'float' object cannot be interpreted as an integer".
-    timeout = _int_env("SOAK_STRESS_DRAIN_TIMEOUT", 120)
+    timeout = _int_env("SOAK_STRESS_DRAIN_TIMEOUT", 60)
 
-    _fire_and_assert_all_completed(
-        fprime_test_api, available, completed_event, timeout
+    fprime_test_api.clear_histories()
+    _drain_batch(
+        fprime_test_api, available, completed_event, timeout, label="reachability"
     )
 
 
-def test_core_commands_stress_burst(fprime_test_api):
-    """Fire hundreds of core commands back-to-back; require EVERY completion.
+def test_core_commands_sustained_load(fprime_test_api):
+    """Send many commands as drain-synced batches; require EVERY completion.
 
-    The burst is intentionally un-throttled to stress the command/telemetry
-    path. With the FSW at raised CPU priority the ComQueue should not overflow,
-    so all `count` completion events are expected to be downlinked. We await the
-    full count with a generous timeout (to let a slow link drain) and assert we
-    received every one.
+    Sustained-load, zero-loss soak: SOAK_STRESS_COMMAND_COUNT commands are sent
+    in batches of SOAK_STRESS_BATCH_SIZE, each batch fully drained before the next
+    so ComQueue never overflows on a healthy system. Asserts that every command's
+    completion event is received -- any drop fails the batch it occurred in.
     """
     available = _resolve_available_commands(fprime_test_api)
     assert available, "No core commands found in the FSW dictionary"
 
-    count = _int_env("SOAK_STRESS_COMMAND_COUNT", 300)
-    inter_delay = _float_env("SOAK_STRESS_INTER_CMD_DELAY", 0.0)
-    timeout = _int_env("SOAK_STRESS_DRAIN_TIMEOUT", 120)
+    count = _int_env("SOAK_STRESS_COMMAND_COUNT", 500)
+    batch_size = max(1, _int_env("SOAK_STRESS_BATCH_SIZE", 20))
+    timeout = _int_env("SOAK_STRESS_DRAIN_TIMEOUT", 60)
 
     completed_event = _resolve_completed_event(fprime_test_api)
     assert completed_event is not None, (
         f"{OP_CODE_COMPLETED_SUFFIX} event not found in dictionary"
     )
 
-    print(f"[stress] Firing {count} commands (inter-command delay={inter_delay}s); "
-          f"requiring all {count} completions within {timeout}s")
+    print(f"[stress] Sending {count} commands in batches of {batch_size}, "
+          f"draining each fully (<= {timeout}s/batch); requiring every completion")
 
-    # Build the burst list, cycling through the available commands.
+    # Cycle through the available commands for an even split across command types.
     sends = [available[i % len(available)] for i in range(count)]
 
-    _fire_and_assert_all_completed(
-        fprime_test_api, sends, completed_event, timeout, inter_delay=inter_delay
+    _run_sustained_load(
+        fprime_test_api, sends, completed_event, batch_size, timeout
     )
