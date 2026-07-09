@@ -43,12 +43,26 @@ pytest -o python_files='*.py' \
   "${DEPLOYMENT_CONFIG_ARGS[@]}"
 pytest_rc=$?
 
-# Fail the job on either the monitor or pytest, but run both first.
+# Generic core-subtopology stress test (ships with this action, not the
+# deployment). It adapts to Linux vs Zephyr by probing the live FSW dictionary
+# and skipping commands the flashed image lacks (e.g. DataProducts on Zephyr).
+echo "[INFO] Running core-subtopology stress test"
+pytest -o python_files='*.py' \
+  --dictionary "${DICT}" \
+  --zmq-transport "${ZMQ_IN}" "${ZMQ_OUT}" \
+  "${DEPLOYMENT_CONFIG_ARGS[@]}" \
+  "${ACTION_PATH}/tests/test_core_stress.py"
+stress_rc=$?
+
+# Fail the job if any of the three ran non-zero, but run all first.
 if [ "${monitor_rc}" -ne 0 ]; then
   exit "${monitor_rc}"
 fi
 if [ "${pytest_rc}" -ne 0 ]; then
   exit "${pytest_rc}"
+fi
+if [ "${stress_rc}" -ne 0 ]; then
+  exit "${stress_rc}"
 fi
 
 echo "[INFO] Soak test passed"
