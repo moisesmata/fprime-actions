@@ -48,6 +48,12 @@ else
   ship() { :; }  # unit file already at destination locally
 fi
 
+# Grant CAP_SYS_NICE so the FSW can set real-time thread priorities and CPU
+# affinity without running as root. =eip makes the capability Effective,
+# Inheritable, and Permitted on the binary. (linux/linux-remote only; pico2
+# returned above.)
+run "sudo setcap cap_sys_nice=eip ${INSTALL_DIR}/bin/fsw"
+
 sed -e "s#__INSTALL_DIR__#${INSTALL_DIR}#g" \
     -e "s#__SERVICE_USER__#${SERVICE_USER}#g" \
     -e "s#__FSW_ARGS__#${FSW_ARGS}#g" \
