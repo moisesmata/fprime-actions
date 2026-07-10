@@ -21,7 +21,6 @@ soak.log row formats (tab-separated, append-only persistent soak log):
   T\t<iso>\t<channel>\t<value>              raw trend-channel sample
 """
 
-import math
 import os
 import re
 import sys
@@ -45,10 +44,17 @@ FSW_ALERT_SEVERITIES = ("FATAL", "WARNING_HI", "WARNING_LO")
 TELEMETRY_WARNING = "Telemetry Warning"
 FAILING_SEVERITIES = FSW_ALERT_SEVERITIES + (TELEMETRY_WARNING,)
 
-# Trend-tracked channel suffixes. MEMORY_USED and CurrBuffs get leak-alert
-# checks in analyze(); NON_VOLATILE_FREE is only trended (and threshold-checked
-# below). Threshold rules live in THRESHOLD_RULES.
+# Trend-tracked channel suffixes. Those in LEAK_THRESHOLDS also get leak-alert
+# checks; NON_VOLATILE_FREE is only trended (and threshold-checked below).
+# Per-sample threshold rules live in THRESHOLD_RULES.
 TREND_SUFFIXES = ("MEMORY_USED", "NON_VOLATILE_FREE", "CurrBuffs")
+
+# Trend suffix -> (alert label, min percent rise to alert). A trend only alerts
+# when its fit is strong (see MIN_TREND_R_SQUARED) and rises by at least this.
+LEAK_THRESHOLDS = {
+    "MEMORY_USED": ("Possible memory leak", MEMORY_LEAK_PERCENT),
+    "CurrBuffs":   ("Possible buffer leak", BUFFER_LEAK_PERCENT),
+}
 
 # SystemResources telemetry is in KB. Auto-pick MB or GB for display.
 MEMORY_SUFFIXES = ("MEMORY_USED", "MEMORY_TOTAL", "NON_VOLATILE_TOTAL", "NON_VOLATILE_FREE")
@@ -68,11 +74,10 @@ def format_value(suffix: str, value: float) -> str:
     return f"{value / KB_PER_MB:.2f} MB"
 
 
-def linear_regression(xs: List[float], ys: List[float]) -> Tuple[float, float, float, float]:
+def linear_regression(xs: List[float], ys: List[float]) -> Tuple[float, float, float]:
     """Least-squares fit y = slope * x + intercept over the given (x, y) lists.
 
-    Returns (slope, intercept, r², residual_σ). r² is 0 when constant;
-    σ uses Bessel-style (n-2) denominator and is 0 for n < 3.
+    Returns (slope, intercept, r²). r² is 0 when constant.
     """
     n = len(ys)
     mean_x = sum(xs) / n
@@ -81,15 +86,11 @@ def linear_regression(xs: List[float], ys: List[float]) -> Tuple[float, float, f
     sxy = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
     syy = sum((y - mean_y) ** 2 for y in ys)
     if sxx == 0 or syy == 0:
-        return 0.0, mean_y, 0.0, 0.0
+        return 0.0, mean_y, 0.0
     slope = sxy / sxx
     intercept = mean_y - slope * mean_x
     r_squared = (sxy * sxy) / (sxx * syy)
-    sigma = 0.0
-    if n > 2:
-        ss_res = sum((y - (intercept + slope * x)) ** 2 for x, y in zip(xs, ys))
-        sigma = math.sqrt(ss_res / (n - 2))
-    return slope, intercept, r_squared, sigma
+    return slope, intercept, r_squared
 
 
 def parse_iso(ts: str) -> Optional[datetime]:
@@ -144,8 +145,8 @@ class Results:
         self.events: List[Tuple[str, str, str, str]] = []           # [(severity, name, body, ts)]
         self.alerts: List[Tuple[str, str, str]] = []                # [(severity, msg, ts)]
         # Trend-table rows: every observed trend-tracked channel produces a row
-        # (status, channel, start, end, pct_str, slope_str, r2_str, sigma_str, time_span_str)
-        self.trend_rows: List[Tuple[str, str, str, str, str, str, str, str, str]] = []
+        # (status, channel, start, end, pct_str, slope_str, r2_str, time_span_str)
+        self.trend_rows: List[Tuple[str, str, str, str, str, str, str, str]] = []
         # Threshold-check rows: every observed threshold-tracked channel produces a row
         # (status, channel, extreme_value_str, extreme_timestamp_str, note_str)
         self.threshold_rows: List[Tuple[str, str, str, str, str]] = []
@@ -157,11 +158,16 @@ class Results:
     def add_channel(self, name: str, value: float, ts: str = ""):
         self.channels.setdefault(name, []).append((value, ts))
 
-    def emit_alert(self, severity: str, message: str, timestamp: str,
-                   log_row: str) -> None:
+    def add_alert(self, severity: str, message: str, timestamp: str,
+                  log_row: str) -> None:
         """Record an alert and the matching soak.log row in one call."""
         self.alerts.append((severity, message, timestamp))
         self.log_records.append(log_row)
+
+    def add_telemetry_warning(self, message: str, timestamp: str) -> None:
+        """Emit a monitor-derived alert as both an alert and an 'A' log row."""
+        self.add_alert(TELEMETRY_WARNING, message, timestamp,
+                       f"A\t{timestamp}\t{TELEMETRY_WARNING}\t{message}")
 
 
 def read_soak_log(path: Path) -> Tuple[
@@ -241,22 +247,33 @@ def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
 
     FSW events and threshold breaches come from THIS WINDOW. Trend analysis
     runs against the FULL HISTORY (post-FATAL window only)."""
+    window_fatal = _analyze_events(results, latest_fatal)
+    _analyze_this_window_channels(results, history)
+    _analyze_trends(results, history, window_fatal)
 
-    # FSW events. Track FATAL timestamps to extend the trend cutoff.
+
+def _analyze_events(results: Results,
+                    latest_fatal: Optional[datetime]) -> Optional[datetime]:
+    """Alert on this window's FSW events. Return the latest FATAL timestamp
+    seen (incl. prior history), which bounds the trend window."""
     window_fatal = latest_fatal
     for severity, event_name, body, timestamp in results.events:
-        if severity in FSW_ALERT_SEVERITIES:
-            results.emit_alert(
-                severity, f"{event_name}: {body}", timestamp,
-                f"E\t{timestamp}\t{severity}\t{event_name}\t{body}",
-            )
-            if severity == "FATAL":
-                when = parse_iso(timestamp)
-                if when is not None and (window_fatal is None or when > window_fatal):
-                    window_fatal = when
+        if severity not in FSW_ALERT_SEVERITIES:
+            continue
+        results.add_alert(
+            severity, f"{event_name}: {body}", timestamp,
+            f"E\t{timestamp}\t{severity}\t{event_name}\t{body}",
+        )
+        when = parse_iso(timestamp) if severity == "FATAL" else None
+        if when is not None and (window_fatal is None or when > window_fatal):
+            window_fatal = when
+    return window_fatal
 
-    # Walk this window's channels: trend channels drain into history + soak.log,
-    # threshold channels feed the threshold-table rows.
+
+def _analyze_this_window_channels(
+        results: Results, history: Dict[str, List[Tuple[float, str]]]) -> None:
+    """Drain this window's channels: trend channels append to history +
+    soak.log; threshold channels feed threshold-table rows and alerts."""
     for channel_name, samples in results.channels.items():
         suffix = channel_name.rsplit(".", 1)[-1]
 
@@ -266,102 +283,107 @@ def analyze(results: Results, history: Dict[str, List[Tuple[float, str]]],
                 results.log_records.append(f"T\t{ts}\t{channel_name}\t{value:g}")
 
         rule = THRESHOLD_BY_SUFFIX.get(suffix)
-        if rule is None:
-            continue
-        _, predicate, label, direction, unit = rule
-        if not samples:
-            results.threshold_rows.append(
-                ("WAITING", channel_name, "n/a", "n/a", "no samples this window"))
-            continue
-        breaches = [(v, t) for v, t in samples if predicate(v)]
-        picker = max if direction == "max" else min
-        pool = breaches or samples
-        extreme_value, extreme_ts = picker(pool, key=lambda b: b[0])
-        value_str = format_threshold_value(suffix, extreme_value, unit)
-        count = len(pool)
-        verb = "breached" if breaches else "observed"
-        note = f"{count} sample{'s' if count != 1 else ''} {verb}"
-        status = "ALERT" if breaches else "OK"
-        results.threshold_rows.append(
-            (status, channel_name, value_str, extreme_ts, note))
-        if breaches:
-            msg = f"{label}: {channel_name}: peak {value_str} at {extreme_ts} ({note})"
-            results.emit_alert(TELEMETRY_WARNING, msg, extreme_ts,
-                f"A\t{extreme_ts}\t{TELEMETRY_WARNING}\t{msg}")
+        if rule is not None:
+            _check_threshold(results, channel_name, suffix, samples, rule)
 
-    # Trend analysis over the full accumulated history.
-    # Insufficient-sample channels render as status WAITING.
-    trend_channels = sorted({c for c in history.keys()
-                             if c.rsplit('.', 1)[-1] in TREND_SUFFIXES})
+
+def _check_threshold(results: Results, channel_name: str, suffix: str,
+                     samples: List[Tuple[float, str]], rule) -> None:
+    """Evaluate one channel against its per-sample threshold rule, appending a
+    threshold-table row and (on breach) an alert."""
+    _, predicate, label, direction, unit = rule
+    if not samples:
+        results.threshold_rows.append(
+            ("WAITING", channel_name, "n/a", "n/a", "no samples this window"))
+        return
+
+    breaches = [(v, t) for v, t in samples if predicate(v)]
+    picker = max if direction == "max" else min
+    pool = breaches or samples
+    extreme_value, extreme_ts = picker(pool, key=lambda b: b[0])
+    value_str = format_threshold_value(suffix, extreme_value, unit)
+    verb = "breached" if breaches else "observed"
+    note = f"{len(pool)} sample{'s' if len(pool) != 1 else ''} {verb}"
+
+    results.threshold_rows.append(
+        ("ALERT" if breaches else "OK", channel_name, value_str, extreme_ts, note))
+    if breaches:
+        results.add_telemetry_warning(
+            f"{label}: {channel_name}: peak {value_str} at {extreme_ts} ({note})",
+            extreme_ts)
+
+
+def _trend_series(
+        samples: List[Tuple[float, str]], window_fatal: Optional[datetime]
+) -> Tuple[List[float], List[float], List[str]]:
+    """Convert (value, iso-ts) samples into parallel (xs, ys, timestamps) lists
+    where xs is seconds since the first sample. Drops samples before the latest
+    FATAL (restart protection) and any with unparseable timestamps."""
+    if window_fatal is not None:
+        samples = [(v, t) for v, t in samples
+                   if (parse_iso(t) or window_fatal) >= window_fatal]
+    first_dt = parse_iso(samples[0][1]) if samples else None
+    if first_dt is None:
+        return [], [], []
+    xs: List[float] = []
+    ys: List[float] = []
+    timestamps: List[str] = []
+    for v, t in samples:
+        dt = parse_iso(t)
+        if dt is not None:
+            xs.append((dt - first_dt).total_seconds())
+            ys.append(v)
+            timestamps.append(t)
+    return xs, ys, timestamps
+
+
+def _analyze_trends(results: Results, history: Dict[str, List[Tuple[float, str]]],
+                    window_fatal: Optional[datetime]) -> None:
+    """Least-squares trend analysis over the full accumulated history.
+    Channels with too few samples render as WAITING."""
+    trend_channels = sorted({c for c in history
+                             if c.rsplit(".", 1)[-1] in TREND_SUFFIXES})
     for channel_name in trend_channels:
         suffix = channel_name.rsplit(".", 1)[-1]
-        is_alert_eligible = suffix in ("MEMORY_USED", "CurrBuffs")
-        samples = history.get(channel_name, [])
-
-        # Restart protection: drop samples older than the latest FATAL so
-        # step changes in counters don't drown the regression.
-        if window_fatal is not None:
-            samples = [(v, t) for v, t in samples
-                       if (parse_iso(t) or window_fatal) >= window_fatal]
-
-        # Build (xs, ys) in seconds-since-first-sample. Drop unparseable
-        # timestamps but keep the row even if too few samples remain.
-        xs: List[float] = []
-        ys: List[float] = []
-        first_dt = parse_iso(samples[0][1]) if samples else None
-        if first_dt is not None:
-            for v, t in samples:
-                dt = parse_iso(t)
-                if dt is None:
-                    continue
-                xs.append((dt - first_dt).total_seconds())
-                ys.append(v)
-
+        xs, ys, timestamps = _trend_series(history.get(channel_name, []), window_fatal)
         n = len(ys)
+
         time_span_str = format_duration(xs[-1]) if n >= 2 else "n/a"
         if n < MIN_POINTS_FOR_TREND or (n >= 2 and xs[-1] == xs[0]):
             note = time_span_str if n >= 2 else f"{n}/{MIN_POINTS_FOR_TREND} samples"
             results.trend_rows.append(
-                ("WAITING", channel_name) + ("n/a",) * 6 + (note,))
+                ("WAITING", channel_name) + ("n/a",) * 5 + (note,))
             continue
 
-        slope, intercept, r_squared, sigma = linear_regression(xs, ys)
-        slope_per_hour = slope * 3600.0
+        slope, intercept, r_squared = linear_regression(xs, ys)
         fitted_first = intercept
         fitted_last = intercept + slope * xs[-1]
-        displacement = abs(fitted_last - fitted_first)
         denominator = abs(fitted_first) or abs(fitted_last) or 1.0
         percent_change = (fitted_last - fitted_first) / denominator * 100.0
 
-        is_kb = suffix in MEMORY_SUFFIXES
-        if is_kb:
+        slope_per_hour = slope * 3600.0
+        if suffix in MEMORY_SUFFIXES:
             slope_str = f"{slope_per_hour / KB_PER_MB:+.4g} MB/hr"
-            sigma_str = f"{sigma / KB_PER_MB:.2f} MB"
         else:
             slope_str = f"{slope_per_hour:+.4g}/hr"
-            sigma_str = f"{sigma:g}"
 
         status = "OK"
-        prefix = ""
-        if is_alert_eligible and r_squared >= MIN_TREND_R_SQUARED and displacement >= sigma:
-            if suffix == "MEMORY_USED" and percent_change >= MEMORY_LEAK_PERCENT:
-                prefix = "Possible memory leak"
-            elif suffix == "CurrBuffs" and percent_change >= BUFFER_LEAK_PERCENT:
-                prefix = "Possible buffer leak"
-        if prefix:
+        label, min_percent = LEAK_THRESHOLDS.get(suffix, (None, 0.0))
+        leaking = (label is not None and r_squared >= MIN_TREND_R_SQUARED
+                   and percent_change >= min_percent)
+        if leaking:
             status = "ALERT"
-            ts = samples[-1][1]
-            msg = (f"{prefix}: {channel_name}: "
-                   f"{format_value(suffix, ys[0])} -> {format_value(suffix, ys[-1])} "
-                   f"(fit: {percent_change:+.1f}% over {n} samples, "
-                   f"slope={slope_str}, R-squared={r_squared:.2f}, sigma={sigma_str})")
-            results.emit_alert(TELEMETRY_WARNING, msg, ts,
-                f"A\t{ts}\t{TELEMETRY_WARNING}\t{msg}")
+            results.add_telemetry_warning(
+                f"{label}: {channel_name}: "
+                f"{format_value(suffix, ys[0])} -> {format_value(suffix, ys[-1])} "
+                f"(fit: {percent_change:+.1f}% over {n} samples, "
+                f"slope={slope_str}, R-squared={r_squared:.2f})",
+                timestamps[-1])
 
         results.trend_rows.append((
             status, channel_name,
             format_value(suffix, ys[0]), format_value(suffix, ys[-1]),
-            f"{percent_change:+.1f}%", slope_str, f"{r_squared:.2f}", sigma_str,
+            f"{percent_change:+.1f}%", slope_str, f"{r_squared:.2f}",
             time_span_str,
         ))
 
@@ -382,7 +404,7 @@ def print_table(headers: Tuple[str, ...], rows: List[Tuple[str, ...]],
 
 TREND_HEADERS = (
     "STATUS", "CHANNEL", "START", "END",
-    "PERCENTAGE CHANGE", "SLOPE", "R-SQUARED", "SIGMA", "TIME SPAN",
+    "PERCENTAGE CHANGE", "SLOPE", "R-SQUARED", "TIME SPAN",
 )
 THRESHOLD_HEADERS = (
     "STATUS", "CHANNEL", "EXTREME VALUE", "TIMESTAMP", "NOTES",
