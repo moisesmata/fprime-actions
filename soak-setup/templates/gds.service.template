@@ -11,8 +11,6 @@ Restart=on-failure
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
-# dialout is needed by the pico2 platform for /dev/tty* access; harmless elsewhere.
-SupplementaryGroups=dialout
 
 [Install]
 WantedBy=multi-user.target

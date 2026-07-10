@@ -2,25 +2,22 @@
 #
 # Platform-dispatched deploy step.
 #   linux         : start FSW locally
-#   linux-remote  : scp binary + rendered service to the FSW Pi over SSH, start it.
-#                   Remote user is 'fprime' with passwordless sudo for systemctl.
-#   pico2         : fprime-ci already flashed the board; verify the serial
-#                   device is back.
+#   linux-remote  : scp binary + service files to the FSW Pi over SSH, start it.
+#                   Remote user is 'fprime' with passwordless sudo for systemctl, journalctl, setcap.
+#   pico2         : fprime-ci already flashed the board; verify the serial device is still active.
 
 set -euo pipefail
 
 if [[ "${PLATFORM}" == "pico2" ]]; then
   FSW_DEVICE="${FSW_DEVICE:-/dev/pico2}"
-  for i in $(seq 1 10); do
-    if [ -e "${FSW_DEVICE}" ]; then
-      echo "[INFO] Serial device ${FSW_DEVICE} detected"
-      exit 0
-    fi
-    echo "[INFO] Waiting for ${FSW_DEVICE} (${i}/10)..."
-    sleep 1
-  done
+
+  if [ -e "${FSW_DEVICE}" ]; then
+    echo "[INFO] Serial device ${FSW_DEVICE} detected"
+    exit 0
+  fi
+
   echo "::warning::Serial device ${FSW_DEVICE} not found"
-  exit 0
+  exit 1
 fi
 
 # linux vs linux-remote: same systemd flow; run() prefixes SSH when remote.
@@ -48,10 +45,7 @@ else
   ship() { :; }  # unit file already at destination locally
 fi
 
-# Grant CAP_SYS_NICE so the FSW can set real-time thread priorities and CPU
-# affinity without running as root. =eip makes the capability Effective,
-# Inheritable, and Permitted on the binary. (linux/linux-remote only; pico2
-# returned above.)
+# Grant CAP_SYS_NICE so the FSW can set real-time thread priorities
 run "sudo setcap cap_sys_nice=eip ${INSTALL_DIR}/bin/fsw"
 
 sed -e "s#__INSTALL_DIR__#${INSTALL_DIR}#g" \

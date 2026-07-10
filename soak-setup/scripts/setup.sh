@@ -2,25 +2,18 @@
 #
 # Soak setup: stage build artifacts into $HOME/fprime-soak-<deployment>,
 # build the soak virtualenv, and start the persistent GDS service.
-#
-# Required environment:
-#   DEPLOYMENT_NAME : unique deployment name (namespaces install dir, service, sockets)
-#   PLATFORM        : "linux" | "linux-remote" | "pico2"
-#   ACTION_PATH     : path to the soak-setup action (provides templates/)
-#   GDS_ARGS        : extra args appended to fprime-gds
-#   FSW_IP          : IP of remote FSW (linux-remote only)
-#   FSW_PORT        : FSW TCP port (linux-remote only, default 50000)
-#   FSW_DEVICE      : serial device (pico2 only, default /dev/pico2)
 
 set -euo pipefail
 
-PLATFORM="${PLATFORM:-linux}"
+PLATFORM="${PLATFORM}"
 INSTALL_DIR="${HOME}/fprime-soak-${DEPLOYMENT_NAME}"
 TEMPLATES="${ACTION_PATH}/templates"
 SERVICE_NAME="fprime-soak-gds-${DEPLOYMENT_NAME}"
 ZMQ_TRANSPORT="--zmq-transport ipc:///tmp/fprime-server-${DEPLOYMENT_NAME}-in ipc:///tmp/fprime-server-${DEPLOYMENT_NAME}-out"
 
+# Delete previous soak install directory
 rm -rf "${INSTALL_DIR}"
+
 mkdir -p "${INSTALL_DIR}"/{bin,dict,gds-logs,ComLoggerFiles,test}
 echo "# SOAK STARTED $(date +%Y-%m-%dT%H:%M:%S)" > "${INSTALL_DIR}/soak.log"
 
@@ -45,28 +38,12 @@ case "${PLATFORM}" in
     ;;
   pico2)
     # fprime-ci archives ./build-artifacts (plus dictionary/executable/test-scripts
-    # by basename) into archive.tar.gz. download-artifact drops it at cwd but
-    # does NOT extract it, so we do that here. The target repo (with integration
-    # tests) is checked out separately at ./
+    # by basename) into archive.tar.gz. 
     echo "[INFO] Staging Pico 2 artifacts from fprime-ci build"
-    if [ -f ./archive.tar.gz ]; then
-      echo "[INFO] Extracting archive.tar.gz"
-      tar -xzf ./archive.tar.gz
-    fi
-    if [ ! -d ./build-artifacts ]; then
-      echo "::error::build-artifacts/ missing after extracting archive.tar.gz"
-      exit 1
-    fi
-    DICT_FILE=$(find ./build-artifacts -name "*TopologyDictionary.json" | head -n 1)
-    if [ -z "${DICT_FILE}" ]; then
-      echo "::error::No TopologyDictionary.json found under build-artifacts/"
-      exit 1
-    fi
-    cp "${DICT_FILE}" "${INSTALL_DIR}/dict/"
-    INT_TEST_DIR=$(find . -path ./lib -prune -o -path ./build-artifacts -prune -o -type d -name "int" -print 2>/dev/null | head -n 1)
-    if [ -n "${INT_TEST_DIR}" ] && [ -d "${INT_TEST_DIR}" ]; then
-      cp -r "${INT_TEST_DIR}"/. "${INSTALL_DIR}/test/"
-    fi
+    echo "[INFO] Extracting archive.tar.gz"
+    tar -xzf ./archive.tar.gz
+    cp ./build-artifacts/*/*/dict/*TopologyDictionary.json "${INSTALL_DIR}/dict/"
+    cp -r ./*/*/test/int/. "${INSTALL_DIR}/test/" 2>/dev/null || true
     GDS_ARGS="--communication-selection uart --uart-device ${FSW_DEVICE:-/dev/pico2} --uart-baud 115200 --uart-skip-port-check ${ZMQ_TRANSPORT} ${GDS_ARGS:-}"
     ;;
   *)
