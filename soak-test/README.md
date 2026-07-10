@@ -1,47 +1,83 @@
 # nasa/fprime-actions/soak-test
 
-The `soak-test` action runs the periodic half of a soak: analyze data captured
-by the persistent FSW + GDS services for health/resource/stability problems,
-then run the deployment's integration tests against the still-running GDS.
+The `soak-test` action runs the periodic half of a soak: analyze telemetry
+captured by the persistent FSW + GDS services for health/resource/stability
+problems, then run the deployment's integration tests against the still-running
+GDS.
 
-It pairs with [`soak-setup`](../soak-setup/) and assumes its conventions
-(`$HOME/fprime-soak/{venv,dict,ComLoggerFiles,test}`, FSW systemd service
-`fprime-soak-fsw`). No inputs.
+It pairs with [`soak-setup`](../soak-setup/) and assumes its conventions: an
+install tree at `$HOME/fprime-soak-<deployment-name>/{bin,dict,gds-logs,ComLoggerFiles,test,venv}`
+and a persistent `soak.log`, all namespaced by `deployment-name`.
 
 What it does, in order:
 
-1. Verifies `fprime-soak-fsw` is active.
-2. Decodes `Svc::ComLogger` `.com` files with `fprime-gds`, raises alerts for
-   FATAL/WARNING events and resource thresholds, and runs trend analysis over
-   every numeric channel to catch slow degradations (memory leak, draining
-   buffer pool, climbing CPU, growing queue depth).
-3. Runs `pytest` against `$HOME/fprime-soak/test/` with the installed
-   dictionary, using the soak venv.
+1. Analyzes accumulated telemetry with
+   [`scripts/soak_monitor.py`](scripts/soak_monitor.py): raises alerts for FSW
+   FATAL/WARNING_HI/WARNING_LO events, per-sample resource threshold breaches,
+   and slow leak trends (see below).
+2. Runs `pytest` against `$HOME/fprime-soak-<deployment-name>/test/` using the
+   soak venv, the installed dictionary, and the deployment's namespaced ZMQ
+   sockets. A deployment-shipped `int_config.json` is forwarded to pytest if
+   present.
 
-Any FATAL event, threshold breach, or pytest failure fails the step.
+Any FATAL/WARNING event, threshold breach, leak trend, or pytest failure fails
+the step.
+
+## Inputs
+
+| Input             | Default      | Description                                                              |
+|-------------------|--------------|--------------------------------------------------------------------------|
+| `deployment-name` | *(required)* | Must match the `deployment-name` given to `soak-setup` for correct namespacing. |
 
 ## Usage
 
 ```yaml
 - uses: nasa/fprime-actions/soak-test@devel
+  with:
+    deployment-name: my-deployment
 ```
 
-## Trend analysis
+## Telemetry sources
 
-Every numeric channel time-series is fit with a least-squares slope and
-compared first-to-last. Channels are classified by name (case-insensitive
-substring) to distinguish "a number that changed" from "a problem":
+The monitor decodes two sources, GDS-first: it parses the GDS text logs
+(`channel.log` / `event.log`) written by the persistent GDS service, and only
+falls back to decoding `Svc::ComLogger` `.com` files if the GDS logs yield
+nothing. Trend samples, FSW events, and monitor-derived alerts all accumulate
+in the persistent `soak.log`; the GDS logs are truncated each run.
 
-| Channel pattern (case-insensitive)              | Concerning direction | Alert                       |
-|-------------------------------------------------|----------------------|-----------------------------|
-| `MEMORY_USED` (Os::SystemResources, KB)         | rising               | possible memory leak        |
-| `NON_VOLATILE_FREE`, `HiBuffs` / `LoBuffs`      | falling              | possible resource depletion |
-| `systemResources.CPU`, `CPU_NN` (percent)       | rising               | rising CPU trend            |
-| `comQueueDepth`, `buffQueueDepth`               | rising               | rising queue depth          |
+## Analysis
 
-`MEMORY_TOTAL`, `NON_VOLATILE_TOTAL`, and rate-group timing channels
-(`RgMaxTime`) are recorded but do not raise trend alerts. CPU channels also
-trigger an instantaneous alert above 90%.
+Channels are classified by their trailing name segment (exact suffix match, e.g.
+`...systemResources.MEMORY_USED`). Two kinds of checks run:
 
-Thresholds (growth/drop percentages and the minimum sample count) are defined
-as constants at the top of [`scripts/soak_monitor.py`](scripts/soak_monitor.py).
+### Per-sample threshold checks
+
+An alert fires the moment any sample in the window breaches its rule.
+
+| Channel suffix      | Rule                          | Alert                       |
+|---------------------|-------------------------------|-----------------------------|
+| `CPU`               | `> 95%`                       | High average CPU usage      |
+| `NoBuffs`           | `> 0`                         | Buffer allocation failure   |
+| `EmptyBuffs`        | `> 0`                         | Empty buffer returned       |
+| `NON_VOLATILE_FREE` | `< 1 GiB`                     | Storage depletion floor     |
+
+### Trend (leak) checks
+
+Trend-tracked channels (`MEMORY_USED`, `NON_VOLATILE_FREE`, `CurrBuffs`) are fit
+with a least-squares slope over the full accumulated history (samples before the
+last FATAL are dropped as restart noise). A leak alert fires only when the fit is
+strong (R² ≥ 0.7) *and* the fitted first-to-last rise clears the channel's
+threshold:
+
+| Channel suffix | Concerning direction | Threshold | Alert                 |
+|----------------|----------------------|-----------|-----------------------|
+| `MEMORY_USED`  | rising               | ≥ 5%      | Possible memory leak  |
+| `CurrBuffs`    | rising               | ≥ 20%     | Possible buffer leak  |
+
+`NON_VOLATILE_FREE` is trended for the summary table but only alerts via the
+threshold floor above, not the trend. A trend needs at least 10 samples before
+it is evaluated; below that it shows as `WAITING`.
+
+All thresholds (percentages, the CPU ceiling, the storage floor, the minimum
+sample count, and the R² gate) are defined as constants at the top of
+[`scripts/soak_monitor.py`](scripts/soak_monitor.py).
