@@ -34,7 +34,7 @@ if [[ "${PLATFORM}" == "linux-remote" ]]; then
   FSW_ARGS="-a ${FSW_BIND_ADDR:-0.0.0.0} -p ${FSW_PORT:-50000}"
   run() { ssh "${FSW_HOST}" "$*"; }
   ship() { scp "$1" "${FSW_HOST}:$2" >/dev/null; }
-  run "sudo rm -rf ${INSTALL_DIR} && mkdir -p ${INSTALL_DIR}/bin"
+run "sudo rm -rf ${INSTALL_DIR:?} && mkdir -p ${INSTALL_DIR:?}/bin"
   ship "${LOCAL_INSTALL_DIR}/bin/fsw" "${INSTALL_DIR}/bin/fsw"
   run "chmod +x ${INSTALL_DIR}/bin/fsw"
 else
