@@ -64,6 +64,7 @@ build-artifacts/<arch>/<deployment>/dict/*TopologyDictionary.json
 | `platform`        | *(required)*   | `linux` \| `linux-remote` \| `pico2`.                                                |
 | `fsw-ip`          | `""`           | Remote FSW IP (`linux-remote` only). SSH user is `fprime`.                            |
 | `fsw-port`        | `50000`        | FSW TCP port (`linux-remote` only).                                                  |
+| `fsw-bind-addr`   | `0.0.0.0`      | FSW bind address (`linux-remote` only). Set to the GDS host IP to restrict access on shared networks. |
 | `fsw-device`      | `/dev/pico2`   | FSW serial device (`pico2` only).                                                    |
 | `gds-args`        | `""`           | Extra flags appended to `fprime-gds`. Communication and `--zmq-transport` flags are added automatically. |
 

@@ -31,7 +31,7 @@ if [[ "${PLATFORM}" == "linux-remote" ]]; then
   FSW_HOST="${FSW_USER}@${FSW_IP}"
   INSTALL_DIR="/home/${FSW_USER}/fprime-soak-${DEPLOYMENT_NAME}"
   SERVICE_USER="${FSW_USER}"
-  FSW_ARGS="-a 0.0.0.0 -p ${FSW_PORT:-50000}"
+  FSW_ARGS="-a ${FSW_BIND_ADDR:-0.0.0.0} -p ${FSW_PORT:-50000}"
   run() { ssh "${FSW_HOST}" "$*"; }
   ship() { scp "$1" "${FSW_HOST}:$2" >/dev/null; }
   run "sudo rm -rf ${INSTALL_DIR} && mkdir -p ${INSTALL_DIR}/bin"

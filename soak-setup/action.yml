@@ -16,6 +16,10 @@ inputs:
     description: "FSW TCP port (linux-remote only)."
     required: false
     default: "50000"
+  fsw-bind-addr:
+    description: "FSW bind address (linux-remote only). Defaults to 0.0.0.0 (all interfaces); set to the GDS host IP to restrict access on shared networks."
+    required: false
+    default: "0.0.0.0"
   fsw-device:
     description: "FSW serial device (pico2 only)."
     required: false
@@ -48,5 +52,6 @@ runs:
         PLATFORM: ${{ inputs.platform }}
         FSW_IP: ${{ inputs.fsw-ip }}
         FSW_PORT: ${{ inputs.fsw-port }}
+        FSW_BIND_ADDR: ${{ inputs.fsw-bind-addr }}
         FSW_DEVICE: ${{ inputs.fsw-device }}
       run: ${{ github.action_path }}/scripts/deploy.sh
