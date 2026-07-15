@@ -21,8 +21,14 @@ communication / `--zmq-transport` flags) are set on the GDS `ExecStart` line;
 the deployment's own `fprime-gds.yml`, if supplied, stays owned by the
 deployment.
 
-Uses `sudo` for systemd operations (`systemctl`, `journalctl`, writing unit
-files into `/etc/systemd/system/`) and `setcap`.
+> [!WARNING]
+> **This action runs privileged commands and has security implications —
+> examine it carefully before use.** It installs and manages `systemd` services
+> and grants Linux capabilities, invoking `systemctl`, `journalctl`, `tee`,
+> `setcap`, and unit-file writes into `/etc/systemd/system/` via `sudo`.
+> Passwordless `sudo` for these commands on the target hardware (the runner, and
+> the remote Pi for `linux-remote`) is required for the action to run smoothly.
+> Only enable this on hardware you control and are willing to grant that access.
 
 ## Platforms
 
