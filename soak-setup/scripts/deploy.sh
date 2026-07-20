@@ -4,7 +4,8 @@
 #   linux         : start FSW locally
 #   linux-remote  : scp binary + service files to the FSW Pi over SSH, start it.
 #                   Remote user is 'fprime' with passwordless sudo restricted to
-#                   systemctl, journalctl, tee, setcap (no other sudo use allowed).
+#                   systemctl, journalctl, setcap, and tee pinned to
+#                   /etc/systemd/system/fprime-soak-*.service (no other sudo use).
 #   pico2         : fprime-ci already flashed the board; verify the serial device is still active.
 
 set -euo pipefail

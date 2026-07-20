@@ -25,10 +25,11 @@ deployment.
 > **This action runs privileged commands and has security implications —
 > examine it carefully before use.** It installs and manages `systemd` services
 > and grants Linux capabilities. The only commands invoked via `sudo` are
-> `systemctl`, `journalctl`, `tee` (unit-file writes into
-> `/etc/systemd/system/`), and `setcap`; passwordless `sudo` should be granted
-> for exactly these commands — and nothing else — on the target hardware (the
-> runner, and the remote Pi for `linux-remote`).
+> `systemctl`, `journalctl`, `setcap`, and `tee` pinned to the service-file
+> path `/etc/systemd/system/fprime-soak-*.service` (never bare `tee`, which
+> would allow overwriting any file as root). Passwordless `sudo` should be
+> granted for exactly these commands — and nothing else — on the target
+> hardware (the runner, and the remote Pi for `linux-remote`).
 > Only enable this on hardware you control and are willing to grant that access.
 
 ## Platforms
@@ -90,6 +91,7 @@ build-artifacts/<arch>/<deployment>/dict/*TopologyDictionary.json
 ```
 
 > Requires a self-hosted runner with `systemd` and passwordless `sudo` limited
-> to `systemctl`, `journalctl`, `tee`, and `setcap`. Meant to run once (setup); the
+> to `systemctl`, `journalctl`, `setcap`, and `tee` pinned to
+> `/etc/systemd/system/fprime-soak-*.service`. Meant to run once (setup); the
 > periodic [`soak-test`](../soak-test/) action runs on a schedule against the
 > services it leaves running.
