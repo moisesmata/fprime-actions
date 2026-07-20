@@ -3,7 +3,8 @@
 # Platform-dispatched deploy step.
 #   linux         : start FSW locally
 #   linux-remote  : scp binary + service files to the FSW Pi over SSH, start it.
-#                   Remote user is 'fprime' with passwordless sudo for systemctl, journalctl, setcap.
+#                   Remote user is 'fprime' with passwordless sudo restricted to
+#                   systemctl, journalctl, tee, setcap (no other sudo use allowed).
 #   pico2         : fprime-ci already flashed the board; verify the serial device is still active.
 
 set -euo pipefail
@@ -34,7 +35,7 @@ if [[ "${PLATFORM}" == "linux-remote" ]]; then
   FSW_ARGS="-a ${FSW_BIND_ADDR:-0.0.0.0} -p ${FSW_PORT:-50000}"
   run() { ssh "${FSW_HOST}" "$*"; }
   ship() { scp "$1" "${FSW_HOST}:$2" >/dev/null; }
-run "sudo rm -rf ${INSTALL_DIR:?} && mkdir -p ${INSTALL_DIR:?}/bin"
+  run "rm -rf ${INSTALL_DIR:?} && mkdir -p ${INSTALL_DIR:?}/bin"
   ship "${LOCAL_INSTALL_DIR}/bin/fsw" "${INSTALL_DIR}/bin/fsw"
   run "chmod +x ${INSTALL_DIR}/bin/fsw"
 else
@@ -53,7 +54,7 @@ sed -e "s#__INSTALL_DIR__#${INSTALL_DIR}#g" \
     -e "s#__FSW_ARGS__#${FSW_ARGS}#g" \
     "${TEMPLATES}/fsw.service.template" > "${UNIT_TMP}"
 ship "${UNIT_TMP}" "${UNIT_TMP}"
-run "sudo mv ${UNIT_TMP} /etc/systemd/system/${SERVICE_NAME}.service"
+run "sudo tee /etc/systemd/system/${SERVICE_NAME}.service < ${UNIT_TMP} >/dev/null && rm -f ${UNIT_TMP}"
 
 run "sudo systemctl disable --now ${SERVICE_NAME} 2>/dev/null || true"
 run "sudo systemctl daemon-reload"
