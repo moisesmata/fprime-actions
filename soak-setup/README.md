@@ -26,8 +26,7 @@ deployment.
 > examine it carefully before use.** It installs and manages `systemd` services
 > and grants Linux capabilities. The only commands invoked via `sudo` are
 > `systemctl`, `journalctl`, `setcap`, and `tee` pinned to the service-file
-> path `/etc/systemd/system/fprime-soak-*.service` (never bare `tee`, which
-> would allow overwriting any file as root). Passwordless `sudo` should be
+> path `/etc/systemd/system/fprime-soak-*.service`. Passwordless `sudo` should be
 > granted for exactly these commands — and nothing else — on the target
 > hardware (the runner, and the remote Pi for `linux-remote`).
 > Only enable this on hardware you control and are willing to grant that access.
