@@ -16,10 +16,11 @@ and ZMQ sockets) so multiple deployments can soak on one runner.
 
 The systemd unit files are rendered from templates in
 [`templates/`](templates/) (`gds.service.template`, `fsw.service.template`).
-Soak-specific GDS flags (`--no-app`, `--logs`, `--dictionary`, and the
-communication / `--zmq-transport` flags) are set on the GDS `ExecStart` line;
-the deployment's own `fprime-gds.yml`, if supplied, stays owned by the
-deployment.
+Only the flags that must be namespaced per deployment are injected on the GDS
+`ExecStart` line: `--no-app`, `--logs`, `--dictionary`, and `--zmq-transport`.
+**Communication selection is owned by the deployment's `fprime-gds.yml`** — the
+action no longer hardcodes comm per platform, so whatever the deployment ships
+(UART, IP, radio framing, file-uplink pacing, …) is what the GDS uses.
 
 > [!WARNING]
 > **This action runs privileged commands and has security implications —
@@ -35,11 +36,11 @@ deployment.
 
 Selected by the `platform` input, handled inline in the two scripts:
 
-| `platform`     | FSW location                                    | GDS communication |
-|----------------|-------------------------------------------------|-------------------|
-| `linux`        | local runner                                    | ZMQ (IPC)         |
-| `linux-remote` | remote Pi over SSH (user `fprime`), IP/port set | IP client         |
-| `pico2`        | board flashed by `fprime-ci`; serial verified   | UART              |
+| `platform`     | FSW location                                    | GDS communication          |
+|----------------|-------------------------------------------------|----------------------------|
+| `linux`        | local runner                                    | per deployment `fprime-gds.yml` |
+| `linux-remote` | remote Pi over SSH (user `fprime`)              | per deployment `fprime-gds.yml` |
+| `pico2`        | board flashed by `fprime-ci`; serial verified   | per deployment `fprime-gds.yml` |
 
 ## Artifact contract
 
@@ -70,10 +71,9 @@ build-artifacts/<arch>/<deployment>/dict/*TopologyDictionary.json
 | `deployment-name` | *(required)*   | Namespaces the install dir, systemd services, and ZMQ sockets.                       |
 | `platform`        | *(required)*   | `linux` \| `linux-remote` \| `pico2`.                                                |
 | `fsw-ip`          | `""`           | Remote FSW IP (`linux-remote` only). SSH user is `fprime`.                            |
-| `fsw-port`        | `50000`        | FSW TCP port (`linux-remote` only).                                                  |
-| `fsw-bind-addr`   | `0.0.0.0`      | FSW bind address (`linux-remote` only). Set to the GDS host IP to restrict access on shared networks. |
+| `fsw-args`        | `""`           | Launch args for the remote FSW (`linux-remote` only). Deployment-specific: a TCP FSW wants e.g. `-a <addr> -p <port>`, a radio-only FSW takes none. |
 | `fsw-device`      | `/dev/pico2`   | FSW serial device (`pico2` only).                                                    |
-| `gds-args`        | `""`           | Extra flags appended to `fprime-gds`. Communication and `--zmq-transport` flags are added automatically. |
+| `gds-args`        | `""`           | Extra flags appended to `fprime-gds`. Communication selection is driven by the deployment's `fprime-gds.yml`; only the namespaced `--zmq-transport` flag is added automatically. |
 
 ## Usage
 

@@ -12,20 +12,16 @@ inputs:
     description: "Remote FSW Pi IP (linux-remote only). SSH user is 'fprime'."
     required: false
     default: ""
-  fsw-port:
-    description: "FSW TCP port (linux-remote only)."
+  fsw-args:
+    description: "Launch args for the remote FSW (linux-remote only). Deployment-specific: a TCP FSW wants e.g. '-a <addr> -p <port>', a radio-only FSW takes none. Defaults to empty."
     required: false
-    default: "50000"
-  fsw-bind-addr:
-    description: "FSW bind address (linux-remote only). Defaults to 0.0.0.0 (all interfaces); set to the GDS host IP to restrict access on shared networks."
-    required: false
-    default: "0.0.0.0"
+    default: ""
   fsw-device:
     description: "FSW serial device (pico2 only)."
     required: false
     default: "/dev/pico2"
   gds-args:
-    description: "Extra flags appended to fprime-gds. Communication and --zmq-transport flags are added automatically."
+    description: "Extra flags appended to fprime-gds. Communication selection is driven by the deployment's fprime-gds.yml; only the namespaced --zmq-transport flag is added automatically."
     required: false
     default: ""
 
@@ -39,7 +35,6 @@ runs:
         DEPLOYMENT_NAME: ${{ inputs.deployment-name }}
         PLATFORM: ${{ inputs.platform }}
         FSW_IP: ${{ inputs.fsw-ip }}
-        FSW_PORT: ${{ inputs.fsw-port }}
         FSW_DEVICE: ${{ inputs.fsw-device }}
         GDS_ARGS: ${{ inputs.gds-args }}
       run: ${{ github.action_path }}/scripts/setup.sh
@@ -51,7 +46,6 @@ runs:
         DEPLOYMENT_NAME: ${{ inputs.deployment-name }}
         PLATFORM: ${{ inputs.platform }}
         FSW_IP: ${{ inputs.fsw-ip }}
-        FSW_PORT: ${{ inputs.fsw-port }}
-        FSW_BIND_ADDR: ${{ inputs.fsw-bind-addr }}
+        FSW_ARGS: ${{ inputs.fsw-args }}
         FSW_DEVICE: ${{ inputs.fsw-device }}
       run: ${{ github.action_path }}/scripts/deploy.sh
