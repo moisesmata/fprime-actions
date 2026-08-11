@@ -62,6 +62,7 @@ which the action extracts in place, plus the target repo checked out at `./`:
 ```
 build-artifacts/<arch>/<deployment>/dict/*TopologyDictionary.json
 <project>/<deployment>/test/int/     # integration tests from the checkout
+fprime-gds.yml                       # optional; the deployment's own GDS config
 ```
 
 ## Inputs

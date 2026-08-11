@@ -34,6 +34,7 @@ case "${PLATFORM}" in
     tar -xzf ./archive.tar.gz
     cp ./build-artifacts/*/*/dict/*TopologyDictionary.json "${INSTALL_DIR}/dict/"
     cp -r ./*/*/test/int/. "${INSTALL_DIR}/test/" 2>/dev/null || true
+    cp ./fprime-gds.yml "${INSTALL_DIR}/fprime-gds.yml" 2>/dev/null || true
     ;;
   *)
     echo "::error::Unknown platform: ${PLATFORM}"
@@ -41,10 +42,6 @@ case "${PLATFORM}" in
     ;;
 esac
 
-# Communication selection is owned by the deployment's fprime-gds.yml (staged
-# above for linux/linux-remote, or discovered from the working dir on pico2).
-# The action injects only the flags that must be namespaced per deployment:
-# --zmq-transport here, plus --no-app/--logs/--dictionary in the unit template.
 GDS_ARGS="${ZMQ_TRANSPORT} ${GDS_ARGS:-}"
 
 DICT_PATH=$(ls "${INSTALL_DIR}/dict/"*TopologyDictionary.json | head -n 1)
