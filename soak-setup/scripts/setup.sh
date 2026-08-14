@@ -47,7 +47,16 @@ GDS_ARGS="${ZMQ_TRANSPORT} ${GDS_ARGS:-}"
 DICT_PATH=$(ls "${INSTALL_DIR}/dict/"*TopologyDictionary.json | head -n 1)
 
 python3 -m venv "${INSTALL_DIR}/venv"
-"${INSTALL_DIR}/venv/bin/pip" install fprime-gds
+# Install the GDS venv's Python deps. A deployment may stage a requirements.txt
+# (alongside fprime-gds.yml) to pin fprime-gds and pull in GDS plugins such as a
+# custom framer; relative paths in it (e.g. ./gds-plugin) resolve from the
+# artifacts dir. Deployments that stage none just get a plain fprime-gds install.
+if [ -f "artifacts/requirements.txt" ]; then
+  echo "[INFO] Installing GDS deps from artifacts/requirements.txt"
+  ( cd artifacts && "${INSTALL_DIR}/venv/bin/pip" install -r requirements.txt )
+else
+  "${INSTALL_DIR}/venv/bin/pip" install fprime-gds
+fi
 
 echo "[INFO] Soak Setup Complete: ${INSTALL_DIR}"
 
